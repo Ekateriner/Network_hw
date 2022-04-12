@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.21)
-project(Server)
+project(Lobby)
 
 set(CMAKE_CXX_STANDARD 20)
 
@@ -8,8 +8,8 @@ CPMAddPackage(
         GITHUB_REPOSITORY lsalzman/enet
         GIT_TAG v1.3.17
 )
-add_executable(network_server main.cpp Server.cpp EnetServer.cpp)
-target_link_libraries(network_server enet)
-target_include_directories(network_server
+add_executable(network_lobby main.cpp EnetLobby.cpp)
+target_link_libraries(network_lobby enet)
+target_include_directories(network_lobby
         PUBLIC
         $<BUILD_INTERFACE:${enet_SOURCE_DIR}/include>)

@@ -1,4 +1,4 @@
-#ifndef MIPT_NETWORK_CLIENT_H
+#ifndef MIPT_NETWORK_Server_H
 #define MIPT_NETWORK_SERVER_H
 
 #include <string>
@@ -46,4 +46,4 @@ private:
 };
 
 
-#endif //MIPT_NETWORK_CLIENT_H
+#endif //MIPT_NETWORK_Server_H
