@@ -1,4 +1,4 @@
-#include "EnetLobby.h"
+#include "EnetLobby.h" // Game Lobby the same one
 
 int main (){
   EnetLobby lobby;

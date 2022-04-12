@@ -70,6 +70,13 @@ void EnetLobby::Run() {
           break;
     
         case ENET_EVENT_TYPE_DISCONNECT:
+        {
+          std::array<char, 64> temp{};
+          std::sprintf(temp.data(), "%x:%u", event.peer->address.host, event.peer->address.port);
+          std::string client_addr = std::string(temp.data());
+          std::cout << "Info: " << client_addr << " has disconnected" << std::endl;
+          event.peer -> data = NULL;
+        }
           break;
     
         case ENET_EVENT_TYPE_NONE:

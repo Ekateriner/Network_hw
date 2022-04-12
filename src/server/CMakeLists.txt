@@ -8,7 +8,7 @@ CPMAddPackage(
         GITHUB_REPOSITORY lsalzman/enet
         GIT_TAG v1.3.17
 )
-add_executable(network_server main.cpp Server.cpp EnetServer.cpp)
+add_executable(network_server main.cpp Server.cpp EnetServer.cpp GameServer.cpp)
 target_link_libraries(network_server enet)
 target_include_directories(network_server
         PUBLIC

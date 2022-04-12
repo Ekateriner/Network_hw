@@ -1,7 +1,7 @@
-#include "EnetServer.h"
+#include "GameServer.h"
 
 int main (){
-  EnetServer server;
+  GameServer server;
   server.Run();
   return 0;
 }
