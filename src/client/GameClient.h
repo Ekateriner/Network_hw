@@ -16,11 +16,8 @@
 #include <allegro5/allegro_primitives.h>
 
 #include "../common/Entity.h"
-
-struct ClientInfo{
-  int id;
-  std::array<char, 64> name;
-};
+#include "../common/Room.h"
+#include "../common/Packet.h"
 
 class GameClient {
 public:
@@ -34,10 +31,12 @@ private:
   void send_info(ENetPeer* peer, std::pair<float, float> mouse_pos);
   void draw(const std::vector<Entity>& entities);
   void init_allegro();
+  void process_event(ENetEvent& event);
+  void clean_game();
   
   static std::string console_input(){
     std::string answer;
-    std::cin >> answer;
+    std::getline(std::cin, answer);
     return answer;
   }
   
@@ -55,10 +54,12 @@ private:
   std::string name;
   static inline int working_flag = 1;
   bool in_game = false;
+  int room_id = -1;
   
   int id = -1;
   std::pair<float, float> mouse_pos = std::make_pair(0, 0);
   std::unordered_map<int, std::string> others;
+  bool creation_stage = false;
   
   const int keep_alive_duration_sec = 60; // in sec
   

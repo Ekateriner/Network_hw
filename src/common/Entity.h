@@ -13,6 +13,22 @@ struct Entity {
   
   float radius;
   int target; //for AI
+  
+//  Entity() {
+//    entity_id = 0;
+//    user_id = -1;
+//    pos = std::make_pair(0, 0);
+//    radius = 0;
+//    target = 0;
+//  }
+//
+//  Entity(uint32_t _id, int _user_id, std::pair<float, float> _pos, float _radius, int _target):
+//    entity_id(_id),
+//    user_id(_user_id),
+//    pos(std::move(_pos)),
+//    radius(_radius),
+//    target(_target)
+//  {}
 };
 
 inline float dist(const std::pair<float, float>& pos1, const std::pair<float, float>& pos2) {

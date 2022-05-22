@@ -4,6 +4,8 @@
 #include <cstdlib>
 #include <future>
 #include <thread>
+#include <cstring>
+#include <sstream>
 
 using namespace std::chrono_literals;
 
@@ -25,21 +27,6 @@ GameClient::GameClient(std::string name, std::string lobby_name, uint32_t port) 
 }
 
 GameClient::~GameClient() {
-  ENetEvent event;
-  enet_peer_disconnect (server_peer, 0);
-//  while (enet_host_service (client, & event, 3000) > 0)
-//  {
-//    switch (event.type)
-//    {
-//      case ENET_EVENT_TYPE_RECEIVE:
-//        enet_packet_destroy(event.packet);
-//        break;
-//      case ENET_EVENT_TYPE_DISCONNECT:
-//        return;
-//    }
-//  }
-  enet_peer_reset (server_peer);
-  
   enet_peer_disconnect (lobby_peer, 0);
 //  while (enet_host_service (client, & event, 3000) > 0)
 //  {
@@ -55,14 +42,32 @@ GameClient::~GameClient() {
 //  }
   enet_peer_reset (lobby_peer);
   
+  enet_host_destroy(client);
+  enet_deinitialize();
+}
+
+void GameClient::clean_game() {
   al_destroy_font(a_font);
   al_destroy_display(a_display);
   //al_destroy_timer(timer);
   al_destroy_event_queue(a_events);
   
-  enet_host_destroy(client);
-  enet_deinitialize();
-}
+  ENetEvent event;
+  enet_peer_disconnect (server_peer, 0);
+//  while (enet_host_service (client, & event, 3000) > 0)
+//  {
+//    switch (event.type)
+//    {
+//      case ENET_EVENT_TYPE_RECEIVE:
+//        enet_packet_destroy(event.packet);
+//        break;
+//      case ENET_EVENT_TYPE_DISCONNECT:
+//        return;
+//    }
+//  }
+  enet_peer_reset (server_peer);
+  
+};
 
 void GameClient::init_allegro() {
   if(!al_init())
@@ -131,16 +136,21 @@ void GameClient::create_peer() {
 }
 
 void GameClient::send_message(const std::string& message, ENetPeer* peer) {
-  ENetPacket* packet = enet_packet_create (message.c_str(),
-                                           message.length(),
+  std::array<char, 1024> server_data{};
+  std::copy_n(message.c_str(), message.length(), server_data.data());
+  
+  Packet<std::array<char, 1024>> data = {.header = Header::ChatMessage, .value=server_data};
+  ENetPacket* packet = enet_packet_create (&data,
+                                           sizeof(data),
                                            ENET_PACKET_FLAG_RELIABLE);
   
   enet_peer_send(peer, 0, packet);
 }
 
 void GameClient::send_info(ENetPeer* peer, std::pair<float, float> mouse_pos) {
-  ENetPacket* packet = enet_packet_create (&mouse_pos,
-                                           sizeof(mouse_pos),
+  Packet<std::pair<float, float>> data = {.header = Header::MousePosition, .value=mouse_pos};
+  ENetPacket* packet = enet_packet_create (&data,
+                                           sizeof(data),
                                            ENET_PACKET_FLAG_UNRELIABLE_FRAGMENT);
 
   enet_peer_send(peer, 1, packet);
@@ -168,6 +178,124 @@ void GameClient::draw(const std::vector<Entity> &entities) {
   redraw = false;
 }
 
+void GameClient::process_event(ENetEvent& event) {
+  switch (event.type) {
+    case ENET_EVENT_TYPE_CONNECT:
+      std::cout << "Error: Invalid client operation" << std::endl;
+      break;
+    
+    case ENET_EVENT_TYPE_RECEIVE: {
+      Header head = *reinterpret_cast<Header*>(event.packet->data);
+      
+      if (head == Header::ClientAbout) {
+        auto other = reinterpret_cast<Packet<ClientInfo> *>(event.packet->data)->value;
+        others[other.id] = std::string(other.name.data());
+      }
+      else if (head == Header::DiscClientAbout) {
+        auto other = reinterpret_cast<Packet<ClientInfo> *>(event.packet->data)->value;
+        others.erase(other.id);
+      }
+      else if (head == Header::ServerInfo) {
+        std::string server_str(reinterpret_cast<Packet<std::array<char, 32>> *>(event.packet->data)->value.data());
+        std::cout << "Connect to server " << server_str << std::endl;
+        uint del = server_str.find(':');
+  
+        ENetAddress address;
+  
+        enet_address_set_host(&address, server_str.substr(0, del).c_str());
+        std::cout << address.host << std::endl;
+        address.port = stoul(server_str.substr(del + 1));
+  
+        server_peer = enet_host_connect(client, &address, 2, 0);
+        if (server_peer == nullptr) {
+          std::cout << "Error: No available peers for ENet connection" << std::endl;
+          break;
+        }
+  
+        /* Wait up to 5 seconds for the connection attempt to succeed. */
+        if (enet_host_service(client, &event, 5000) > 0 &&
+            event.type == ENET_EVENT_TYPE_CONNECT) {
+          std::cout << "Info: Connected to server" << std::endl;
+        } else {
+          enet_peer_reset(server_peer);
+          std::cout << "Error: Connection to server failed" << std::endl;
+  
+          Packet<uint> data = {.header=Header::DisconnectRoom, .value=uint(room_id)};
+          ENetPacket* packet = enet_packet_create (&data,
+                                                   sizeof(data),
+                                                   ENET_PACKET_FLAG_RELIABLE);
+  
+          enet_peer_send(lobby_peer, 0, packet);
+  
+          /* Wait up to 5 seconds for the connection attempt to succeed. */
+          while (enet_host_service (client, & event, 5000) > 0 &&
+                 event.type == ENET_EVENT_TYPE_RECEIVE) {
+            Header head = *reinterpret_cast<Header*>(event.packet->data);
+            if (head == Header::ResultSuccess) {
+              std::cout << "Info: Disconnection success" << std::endl;
+              room_id = -1;
+              others.clear();
+              if (in_game) {
+                clean_game();
+                in_game = false;
+              }
+              enet_packet_destroy(event.packet);
+              break;
+            }
+            else if (head == Header::ResultFailed) {
+              std::cout << "Info: Disconnection failed" << std::endl;
+              enet_packet_destroy(event.packet);
+              break;
+            }
+            else {
+              process_event(event);
+            }
+          }
+          break;
+        }
+  
+        std::array<char, 64> name_array{};
+        std::sprintf(name_array.data(), "%s", name.c_str());
+        ClientInfo info = {.id = id, .name=name_array};
+  
+        Packet<ClientInfo> data = {.header = Header::ClientAbout, .value = info};
+        ENetPacket *packet_res = enet_packet_create(&data,
+                                                    sizeof(data),
+                                                    ENET_PACKET_FLAG_RELIABLE);
+        enet_peer_send(server_peer, 0, packet_res);
+      }
+      else if (head == Header::GameInfo) {
+        auto info = reinterpret_cast<Packet<std::array<int, 2>>*>(event.packet->data)->value;
+        weight = info[0];
+        height = info[1];
+        init_allegro();
+        
+        in_game = true;
+      }
+      else if (head == Header::Entities) {
+        // get entities
+        std::vector<Entity> to_draw;
+        std::array<Entity, 4048> data = reinterpret_cast<Packet<std::array<Entity, 4048>> *> (event.packet->data)->value;
+        std::copy_if(data.begin(), data.end(), std::back_inserter(to_draw), [](Entity e) { return e.radius > 0.0001; });
+        draw(to_draw);
+      }
+      else if (head == Header::ChatMessage) {
+        std::string message(reinterpret_cast<Packet<std::array<char, 1024>> *> (event.packet->data)->value.data());
+        std::cout << "Message: " << message << std::endl;
+      }
+      enet_packet_destroy(event.packet);
+    }
+      break;
+    
+    case ENET_EVENT_TYPE_DISCONNECT:
+      std::cout << "Error: Invalid client operation" << std::endl;
+      break;
+    
+    case ENET_EVENT_TYPE_NONE:
+      break;
+  }
+}
+
 void GameClient::Run() {
   ENetEvent event;
   {
@@ -184,9 +312,57 @@ void GameClient::Run() {
     
     /* Wait up to 5 seconds for the connection attempt to succeed. */
     if (enet_host_service (client, & event, 5000) > 0 &&
-        event.type == ENET_EVENT_TYPE_CONNECT)
-    {
+        event.type == ENET_EVENT_TYPE_CONNECT) {
       std::cout << "Info: Connected to lobby" << std::endl;
+      
+      if (enet_host_service (client, & event, 5000) > 0 &&
+          event.type == ENET_EVENT_TYPE_RECEIVE) {
+        Header head = *reinterpret_cast<Header*>(event.packet->data);
+        if (head != Header::ClientId) {
+          std::cout << "Error: Lobby didn't send id" << std::endl;
+        }
+        else {
+          id = int(reinterpret_cast<Packet<uint>*>(event.packet->data)->value);
+        }
+        enet_packet_destroy(event.packet);
+      }
+  
+      std::array<char, 64> name_array{};
+      std::sprintf(name_array.data(), "%s", name.c_str());
+      ClientInfo info = {.id = id, .name=name_array};
+  
+      Packet<ClientInfo> data = {.header = Header::ClientAbout, .value = info};
+      ENetPacket *packet_res = enet_packet_create(&data,
+                                                  sizeof(data),
+                                                  ENET_PACKET_FLAG_RELIABLE);
+      enet_peer_send(lobby_peer, 0, packet_res);
+  
+      while (enet_host_service (client, & event, 5000) > 0 &&
+             event.type == ENET_EVENT_TYPE_RECEIVE) {
+        Header head = *reinterpret_cast<Header *>(event.packet->data);
+        if (head == Header::RoomList) {
+          std::array<RoomInfo, 256> rooms = reinterpret_cast<Packet<std::array<RoomInfo, 256>>*>(event.packet->data)->value;
+          std::cout << "Room_name: id. now/max. Status. Settings: radius, velocity." << std::endl;
+          for(size_t i = 0; i < rooms.size(); i++) {
+            if (rooms[i].max_clients_count == 0)
+              continue;
+            std::cout << std::string(rooms[i].name.data()) << ": " << i << ". " << rooms[i].clients_count << "/" << rooms[i].max_clients_count
+                      << ". ";
+            if(rooms[i].game_start) {
+              std::cout << "Running. ";
+            }
+            else {
+              std::cout << "Waiting. ";
+            }
+            std::cout << "Settings: " << rooms[i].start_radius << ", " << rooms[i].velocity << "." << std::endl;
+          }
+          enet_packet_destroy(event.packet);
+          break;
+        }
+        else {
+          process_event(event);
+        }
+      }
     }
     else
     {
@@ -197,27 +373,188 @@ void GameClient::Run() {
   
   auto input = std::async(std::launch::async, console_input);
   
-  while(working_flag) {
+  while(working_flag != 0) {
     if (input.wait_for(0ms) == std::future_status::ready) {
       auto input_string = input.get();
       input = std::async(std::launch::async, console_input);
-      if (input_string == "/start" && !in_game) {
-        send_message("start", lobby_peer);
+      if (creation_stage) {
+        RoomInfo info{};
+        std::string room_name;
+        std::istringstream(input_string) >> room_name >> info.max_clients_count >> info.start_radius >> info.velocity >> info.adaptive_vel;
+        std::copy_n(room_name.c_str(), room_name.length(), info.name.data());
+        
+        Packet<RoomInfo> data = {.header=Header::NewRoomInfo, .value=info};
+        ENetPacket* packet = enet_packet_create (&data,
+                                                 sizeof(data),
+                                                 ENET_PACKET_FLAG_RELIABLE);
+  
+        enet_peer_send(lobby_peer, 0, packet);
+  
+        /* Wait up to 5 seconds for the connection attempt to succeed. */
+        while (enet_host_service (client, & event, 5000) > 0 &&
+               event.type == ENET_EVENT_TYPE_RECEIVE) {
+          Header head = *reinterpret_cast<Header*>(event.packet->data);
+          if (head == Header::ResultSuccess) {
+            std::cout << "Info: Creation success" << std::endl;
+            enet_packet_destroy(event.packet);
+            break;
+          }
+          else if (head == Header::ResultFailed) {
+            std::cout << "Info: Creation failed" << std::endl;
+            enet_packet_destroy(event.packet);
+            break;
+          }
+          else {
+            process_event(event);
+          }
+        }
+        creation_stage = false;
+      }
+      else if (input_string == "/rooms") {
+        Packet<char> data = {.header=Header::RoomList};
+        ENetPacket* packet = enet_packet_create (&data,
+                                                 sizeof(data),
+                                                 ENET_PACKET_FLAG_RELIABLE);
+  
+        enet_peer_send(lobby_peer, 0, packet);
+  
+        while (enet_host_service (client, & event, 5000) > 0 &&
+               event.type == ENET_EVENT_TYPE_RECEIVE) {
+          Header head = *reinterpret_cast<Header *>(event.packet->data);
+          if (head == Header::RoomList) {
+            std::array<RoomInfo, 256> rooms = reinterpret_cast<Packet<std::array<RoomInfo, 256>>*>(event.packet->data)->value;
+            std::cout << "Room_name: id. now/max. Status. Settings: radius, velocity." << std::endl;
+            for(size_t i = 0; i < rooms.size(); i++) {
+              if (rooms[i].max_clients_count == 0)
+                continue;
+              std::cout << std::string(rooms[i].name.data()) << ": " << i << ". " << rooms[i].clients_count << "/" << rooms[i].max_clients_count
+              << ". ";
+              if(rooms[i].game_start) {
+                std::cout << "Running. ";
+              }
+              else {
+                std::cout << "Waiting. ";
+              }
+              std::cout << "Settings: " << rooms[i].start_radius << ", " << rooms[i].velocity << "." << std::endl;
+            }
+            enet_packet_destroy(event.packet);
+            break;
+          }
+          else {
+            process_event(event);
+          }
+        }
       }
       else if (input_string == "/exit") {
         working_flag = 0;
+        if (room_id != -1) {
+          Packet<uint> data = {.header=Header::DisconnectRoom, .value=uint(room_id)};
+          ENetPacket *packet = enet_packet_create(&data,
+                                                  sizeof(data),
+                                                  ENET_PACKET_FLAG_RELIABLE);
+  
+          enet_peer_send(lobby_peer, 0, packet);
+  
+          /* Wait up to 5 seconds for the connection attempt to succeed. */
+          while (enet_host_service(client, &event, 5000) > 0 &&
+                 event.type == ENET_EVENT_TYPE_RECEIVE) {
+            Header head = *reinterpret_cast<Header *>(event.packet->data);
+            if (head == Header::ResultSuccess) {
+              std::cout << "Info: Disconnection success" << std::endl;
+              room_id = -1;
+              others.clear();
+              if (in_game) {
+                clean_game();
+                in_game = false;
+              }
+              enet_packet_destroy(event.packet);
+              break;
+            } else if (head == Header::ResultFailed) {
+              std::cout << "Info: Disconnection failed" << std::endl;
+              enet_packet_destroy(event.packet);
+              break;
+            } else {
+              process_event(event);
+            }
+          }
+        }
       }
-      else if (input_string == "/other" && in_game) {
-        for (auto client_info : others) {
+      else if (input_string == "/other" && room_id != -1) {
+        for (auto& client_info : others) {
           std::cout << "Id: " << client_info.first << " / Name: " << client_info.second << std::endl;
         }
+      }
+      else if(input_string.starts_with("/connect ") && room_id == -1) {
+        Packet<uint> data = {.header=Header::ConnectRoom, .value=uint(std::stoi(input_string.substr(9)))};
+        ENetPacket* packet = enet_packet_create (&data,
+                                                 sizeof(data),
+                                                 ENET_PACKET_FLAG_RELIABLE);
+  
+        enet_peer_send(lobby_peer, 0, packet);
+  
+        /* Wait up to 5 seconds for the connection attempt to succeed. */
+        while (enet_host_service (client, & event, 5000) > 0 &&
+            event.type == ENET_EVENT_TYPE_RECEIVE) {
+          Header head = *reinterpret_cast<Header*>(event.packet->data);
+          if (head == Header::ResultSuccess) {
+            std::cout << "Info: Connection success" << std::endl;
+            room_id = stoi(input_string.substr(9));
+            enet_packet_destroy(event.packet);
+            break;
+          }
+          else if (head == Header::ResultFailed) {
+            std::cout << "Info: Connection failed" << std::endl;
+            enet_packet_destroy(event.packet);
+            break;
+          }
+          else {
+            process_event(event);
+          }
+        }
+      }
+      else if(input_string == "/disconnect" && room_id != -1) {
+        Packet<uint> data = {.header=Header::DisconnectRoom, .value=uint(room_id)};
+        ENetPacket* packet = enet_packet_create (&data,
+                                                 sizeof(data),
+                                                 ENET_PACKET_FLAG_RELIABLE);
+  
+        enet_peer_send(lobby_peer, 0, packet);
+  
+        /* Wait up to 5 seconds for the connection attempt to succeed. */
+        while (enet_host_service (client, & event, 5000) > 0 &&
+            event.type == ENET_EVENT_TYPE_RECEIVE) {
+          Header head = *reinterpret_cast<Header*>(event.packet->data);
+          if (head == Header::ResultSuccess) {
+            std::cout << "Info: Disconnection success" << std::endl;
+            room_id = -1;
+            others.clear();
+            if (in_game) {
+              clean_game();
+              in_game = false;
+            }
+            enet_packet_destroy(event.packet);
+            break;
+          }
+          else if (head == Header::ResultFailed) {
+            std::cout << "Info: Disconnection failed" << std::endl;
+            enet_packet_destroy(event.packet);
+            break;
+          }
+          else {
+            process_event(event);
+          }
+        }
+      }
+      else if (input_string == "/create") {
+        std::cout << "Write room params: 'name' 'max players' 'start radius' 'velocity' 'adaptive mod(0 or 1)" << std::endl;
+        creation_stage = true;
       }
       else if (in_game) {
         send_message(input_string, server_peer);
       }
     }
-  
-    if (id != -1) {
+    
+    if (in_game) {
       ALLEGRO_EVENT a_event;
     
       while (!al_is_event_queue_empty(a_events)) {
@@ -232,77 +569,13 @@ void GameClient::Run() {
             break;
         }
       }
+      
+      send_info(server_peer, mouse_pos);
     }
     
     
     while ( enet_host_service(client, &event, 10) > 0) {
-      switch (event.type) {
-        case ENET_EVENT_TYPE_CONNECT:
-          std::cout << "Error: Invalid client operation" << std::endl;
-          break;
-    
-        case ENET_EVENT_TYPE_RECEIVE: {
-          std::string message = std::string(reinterpret_cast<char*>(event.packet->data),
-                                            reinterpret_cast<char*>(event.packet->data) + event.packet->dataLength);
-          if (!in_game) {
-            uint del = message.find(':');
-        
-            ENetAddress address;
-        
-            enet_address_set_host(&address, message.substr(0, del).c_str());
-            address.port = stoul(message.substr(del + 1));
-        
-            server_peer = enet_host_connect(client, &address, 2, 0);
-            if (server_peer == nullptr) {
-              std::cout << "Error: No available peers for ENet connection" << std::endl;
-            }
-        
-            /* Wait up to 5 seconds for the connection attempt to succeed. */
-            if (enet_host_service(client, &event, 5000) > 0 &&
-                event.type == ENET_EVENT_TYPE_CONNECT) {
-              std::cout << "Info: Connected to server" << std::endl;
-            } else {
-              enet_peer_reset(server_peer);
-              std::cout << "Error: Connection to server failed" << std::endl;
-            }
-            in_game = true;
-  
-            send_message(name, server_peer);
-        
-          } else if (event.peer == server_peer && event.channelID == 0) {
-            if (message[event.packet->dataLength - 1] == 's') {
-              int* info = reinterpret_cast<int*>(event.packet->data);
-              id = *info;
-              weight = *(info + 1);
-              height = *(info + 2);
-              init_allegro();
-            }
-            else if (message[event.packet->dataLength - 1] == 'o') {
-              auto other = reinterpret_cast<ClientInfo *>(event.packet->data);
-              others[other->id] = std::string(other->name.data());
-            }
-            else if (message[event.packet->dataLength - 1] == 'e') {
-              // get entities
-              std::vector<Entity> to_draw(reinterpret_cast<Entity*>(event.packet->data),
-                                          reinterpret_cast<Entity*>(event.packet->data) + (event.packet->dataLength - 1) / sizeof(Entity));
-              draw(to_draw);
-            }
-          }
-          else if (event.peer == server_peer && event.channelID == 1) {
-            std::cout << "Message: " << message << std::endl;
-          }
-          enet_packet_destroy(event.packet);
-        }
-          break;
-    
-        case ENET_EVENT_TYPE_DISCONNECT:
-          std::cout << "Error: Invalid client operation" << std::endl;
-          break;
-    
-        case ENET_EVENT_TYPE_NONE:
-          break;
-      }
+      process_event(event);
     }
-    send_info(server_peer, mouse_pos);
   }
 }
