@@ -3,6 +3,7 @@
 #include <csignal>
 #include <iostream>
 #include <arpa/inet.h>
+#include "../common/Packet.h"
 
 EnetLobby::EnetLobby(uint32_t port) {
   struct sigaction action_term = {};
@@ -50,6 +51,7 @@ void EnetLobby::send_rooms_list(ENetPeer* receiver) {
   std::array<RoomInfo, 256> rooms_data{};
   std::copy_n(roomInfos.data(), roomInfos.size(), rooms_data.data());
   Packet<std::array<RoomInfo, 256>> data = {.header = Header::RoomList, .value = rooms_data};
+  subscribe(&data, clients_key[receiver], sizeof(data));
   ENetPacket *packet = enet_packet_create(&data,
                                           sizeof(data),
                                           ENET_PACKET_FLAG_RELIABLE);
@@ -62,6 +64,7 @@ void EnetLobby::start_room(uint32_t id) {
   Room room = rooms[id];
   Packet<RoomInfo> data = {.header = Header::CreateServer, .value=RoomInfo(room.name, room.game_start, room.clients.size(), room.max_clients_count,
                                                                            room.start_radius, room.velocity, room.adaptive_vel)};
+  ///!!!!!!agent??????
   ENetPacket *packet = enet_packet_create(&data,
                                           sizeof(data),
                                           ENET_PACKET_FLAG_RELIABLE);
@@ -76,18 +79,32 @@ void EnetLobby::start_room(uint32_t id) {
 void EnetLobby::process_event(ENetEvent& event) {
   switch (event.type) {
     case ENET_EVENT_TYPE_CONNECT: {
-      Packet<uint> data = {.header=Header::ClientId, .value = id_counter};
-      ENetPacket *packet_res = enet_packet_create(&data,
-                                                  sizeof(data),
-                                                  ENET_PACKET_FLAG_RELIABLE);
-      
-      enet_peer_send(event.peer, 0, packet_res);
+      clients_key[event.peer] = generate_key();
+  
+      {
+        Packet<int> data = {.header=Header::Key, .value = clients_key[event.peer]};
+        ENetPacket *packet_res = enet_packet_create(&data,
+                                                    sizeof(data),
+                                                    ENET_PACKET_FLAG_RELIABLE);
+  
+        enet_peer_send(event.peer, 0, packet_res);
+      }
+  
+      {
+        Packet<uint> data = {.header=Header::ClientId, .value = id_counter};
+        subscribe(&data, clients_key[event.peer], sizeof(data));
+        ENetPacket *packet_res = enet_packet_create(&data,
+                                                    sizeof(data),
+                                                    ENET_PACKET_FLAG_RELIABLE);
+        enet_peer_send(event.peer, 0, packet_res);
+      }
       id_counter += 1;
       
       send_rooms_list(event.peer);
     }
       break;
     case ENET_EVENT_TYPE_RECEIVE: {
+      subscribe(event.packet->data, clients_key[event.peer], event.packet->dataLength);
       Header head = *reinterpret_cast<Header *>(event.packet->data);
       if (head == Header::RoomList) {
         send_rooms_list(event.peer);
@@ -100,26 +117,27 @@ void EnetLobby::process_event(ENetEvent& event) {
   
           {
             Packet<char> data = {.header=Header::ResultSuccess};
+            subscribe(&data, clients_key[event.peer], sizeof(data));
             ENetPacket *packet_res = enet_packet_create(&data,
                                                         sizeof(data),
                                                         ENET_PACKET_FLAG_RELIABLE);
-    
             enet_peer_send(event.peer, 0, packet_res);
           }
   
           for(auto& [client_peer, info] : rooms[id].clients) {
             if (event.peer != client_peer) {
               Packet<ClientInfo> data = {.header = Header::ClientAbout, .value = rooms[id].clients[event.peer]};
+              subscribe(&data, clients_key[client_peer], sizeof(data));
               ENetPacket* packet = enet_packet_create (&data,
                                                        sizeof(data),
                                                        ENET_PACKET_FLAG_RELIABLE);
               enet_peer_send(client_peer, 0, packet);
       
               Packet<ClientInfo> data_to_new = {.header = Header::ClientAbout, .value = info};
+              subscribe(&data_to_new, clients_key[event.peer], sizeof(data_to_new));
               ENetPacket* packet_to_new = enet_packet_create (&data_to_new,
                                                               sizeof(data_to_new),
                                                               ENET_PACKET_FLAG_RELIABLE);
-      
               enet_peer_send(event.peer, 0, packet_to_new);
             }
           }
@@ -132,16 +150,17 @@ void EnetLobby::process_event(ENetEvent& event) {
             std::array<char, 32> server_data{};
             std::copy_n(rooms[id].server.c_str(), rooms[id].server.length(), server_data.data());
             Packet<std::array<char, 32>> data = {.header = Header::ServerInfo, .value=server_data};
+            subscribe(&data, clients_key[event.peer], sizeof(data));
             ENetPacket *packet = enet_packet_create(&data,
                                                     sizeof(data),
                                                     ENET_PACKET_FLAG_RELIABLE);
-            
             enet_peer_send(event.peer, 0, packet);
             enet_host_flush(lobby);
           }
         }
         else {
           Packet<char> data = {.header=Header::ResultFailed};
+          subscribe(&data, clients_key[event.peer], sizeof(data));
           ENetPacket *packet_res = enet_packet_create(&data,
                                                       sizeof(data),
                                                       ENET_PACKET_FLAG_RELIABLE);
@@ -156,6 +175,7 @@ void EnetLobby::process_event(ENetEvent& event) {
           
           for (auto& [client_peer, info] : rooms[id].clients) {
             Packet<ClientInfo> data = {.header=Header::DiscClientAbout, .value = wait_room.clients[event.peer]};
+            subscribe(&data, clients_key[client_peer], sizeof(data));
             ENetPacket *packet_res = enet_packet_create(&data,
                                                         sizeof(data),
                                                         ENET_PACKET_FLAG_RELIABLE);
@@ -165,6 +185,7 @@ void EnetLobby::process_event(ENetEvent& event) {
   
           {
             Packet<char> data = {.header=Header::ResultSuccess};
+            subscribe(&data, clients_key[event.peer], sizeof(data));
             ENetPacket *packet_res = enet_packet_create(&data,
                                                         sizeof(data),
                                                         ENET_PACKET_FLAG_RELIABLE);
@@ -174,6 +195,7 @@ void EnetLobby::process_event(ENetEvent& event) {
         }
         else {
           Packet<char> data = {.header=Header::ResultFailed};
+          subscribe(&data, clients_key[event.peer], sizeof(data));
           ENetPacket *packet_res = enet_packet_create(&data,
                                                       sizeof(data),
                                                       ENET_PACKET_FLAG_RELIABLE);
@@ -185,6 +207,7 @@ void EnetLobby::process_event(ENetEvent& event) {
         RoomInfo info = reinterpret_cast<Packet<RoomInfo>*>(event.packet->data)->value;
         rooms.emplace_back(info.name, info.max_clients_count, info.start_radius, info.velocity, info.adaptive_vel);
         Packet<char> data = {.header=Header::ResultSuccess};
+        subscribe(&data, clients_key[event.peer], sizeof(data));
         ENetPacket *packet_res = enet_packet_create(&data,
                                                     sizeof(data),
                                                     ENET_PACKET_FLAG_RELIABLE);
@@ -280,8 +303,9 @@ void EnetLobby::Run() {
   
             std::array<char, 32> server_data{};
             std::copy_n(rooms[room_id].server.c_str(), rooms[room_id].server.length(), server_data.data());
-            Packet<std::array<char, 32>> data = {.header = Header::ServerInfo, .value=server_data};
             for (auto&[client_peer, info]: rooms[room_id].clients) {
+              Packet<std::array<char, 32>> data = {.header = Header::ServerInfo, .value=server_data};
+              subscribe(&data, clients_key[event.peer], sizeof(data));
               ENetPacket *packet = enet_packet_create(&data,
                                                       sizeof(data),
                                                       ENET_PACKET_FLAG_RELIABLE);

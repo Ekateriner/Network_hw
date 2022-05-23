@@ -10,14 +10,12 @@
 #include <vector>
 #include <iostream>
 
-
 #include <allegro5/allegro5.h>
 #include <allegro5/allegro_font.h>
 #include <allegro5/allegro_primitives.h>
 
 #include "../common/Entity.h"
 #include "../common/Room.h"
-#include "../common/Packet.h"
 
 class GameClient {
 public:
@@ -27,8 +25,8 @@ public:
   
 private:
   void create_peer();
-  void send_message(const std::string& message, ENetPeer* peer);
-  void send_info(ENetPeer* peer, std::pair<float, float> mouse_pos);
+  void send_message(const std::string& message);
+  void send_info(std::pair<float, float> mouse_pos);
   void draw(const std::vector<Entity>& entities);
   void init_allegro();
   void process_event(ENetEvent& event);
@@ -71,6 +69,9 @@ private:
   int weight;
   int height;
   bool redraw = true;
+  
+  int lobby_key=0;
+  int server_key=0;
 };
 
 

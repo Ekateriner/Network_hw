@@ -1,11 +1,10 @@
 #include "GameServer.h"
-#include <unistd.h>
 #include <csignal>
 #include <iostream>
-#include <arpa/inet.h>
 #include <random>
 #include <cstring>
 #include <chrono>
+#include "../common/Packet.h"
 
 GameServer::GameServer(uint32_t port, float _radius, float _velocity):
   radius(_radius),
@@ -158,9 +157,12 @@ void GameServer::add_new_client(ENetPeer* peer, const ClientInfo& info) {
   clients_entities[peer] = entities.size();
   clients[peer] = info;
   
+  //generate kay
+  
   std::array<int, 2> game_info = {weight, height};
   
   Packet<std::array<int, 2>> data = {.header = Header::GameInfo, .value = game_info};
+  subscribe(&data, clients_key[peer], sizeof(data));
   ENetPacket* packet = enet_packet_create (&data,
                                            sizeof(data),
                                            ENET_PACKET_FLAG_RELIABLE);
@@ -173,9 +175,10 @@ void GameServer::resend_message(ENetPeer* peer, const std::string& message) {
   std::sprintf(text.data(), "From %s (id - %d): %s", clients[peer].name.data(), clients[peer].id, message.c_str());
   std::cout << "Info: " << std::string(text.data()) << std::endl;
   
-  Packet<std::array<char, 1024>> data = {.header=Header::ChatMessage, .value = text};
   for(auto [client_peer, info] : clients) {
     if (peer != client_peer) {
+      Packet<std::array<char, 1024>> data = {.header=Header::ChatMessage, .value = text};
+      subscribe(&data, clients_key[client_peer], sizeof(data));
       ENetPacket * packet = enet_packet_create (&data,
                                                 sizeof(data),
                                                 ENET_PACKET_FLAG_UNRELIABLE_FRAGMENT);
@@ -193,10 +196,19 @@ void GameServer::Run() {
   while(working_flag) {
     while (enet_host_service(server, &event, 10) > 0) {
       switch (event.type) {
-        case ENET_EVENT_TYPE_CONNECT:
+        case ENET_EVENT_TYPE_CONNECT: {
+          clients_key[event.peer] = generate_key();
+          Packet<int> data = {.header=Header::Key, .value = clients_key[event.peer]};
+          ENetPacket *packet_res = enet_packet_create(&data,
+                                                      sizeof(data),
+                                                      ENET_PACKET_FLAG_RELIABLE);
+  
+          enet_peer_send(event.peer, 0, packet_res);
           break;
+        }
         case ENET_EVENT_TYPE_RECEIVE:
         {
+          subscribe(event.packet->data, clients_key[event.peer], event.packet->dataLength);
           Header head = *reinterpret_cast<Header*>(event.packet->data);
           if (head == Header::ClientAbout) {
             ClientInfo info = reinterpret_cast<Packet<ClientInfo>*>(event.packet->data)->value;
@@ -250,10 +262,11 @@ void GameServer::Run() {
         std::array<Entity, 4048> entities_data{};
         std::copy_n(entities.data(), entities.size(), entities_data.data());
         Packet<std::array<Entity, 4048>> data = {.header = Header::Entities, .value = entities_data};
+        subscribe(&data, clients_key[client_peer], sizeof(data));
         ENetPacket* packet = enet_packet_create (&data,
                                                  sizeof(data),
-                                                 ENET_PACKET_FLAG_RELIABLE);
-        enet_peer_send(client_peer, 0, packet);
+                                                 ENET_PACKET_FLAG_UNRELIABLE_FRAGMENT);
+        enet_peer_send(client_peer, 1, packet);
       }
       enet_host_flush(server);
       //std::cout << "Info: broadcasting" << std::endl;

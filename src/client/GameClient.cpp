@@ -1,11 +1,11 @@
 #include "GameClient.h"
-#include <unistd.h>
 #include <csignal>
 #include <cstdlib>
 #include <future>
 #include <thread>
 #include <cstring>
 #include <sstream>
+#include "../common/Packet.h"
 
 using namespace std::chrono_literals;
 
@@ -135,25 +135,27 @@ void GameClient::create_peer() {
   }
 }
 
-void GameClient::send_message(const std::string& message, ENetPeer* peer) {
+void GameClient::send_message(const std::string& message) {
   std::array<char, 1024> server_data{};
   std::copy_n(message.c_str(), message.length(), server_data.data());
   
   Packet<std::array<char, 1024>> data = {.header = Header::ChatMessage, .value=server_data};
+  subscribe(&data, server_key, sizeof(data));
   ENetPacket* packet = enet_packet_create (&data,
                                            sizeof(data),
                                            ENET_PACKET_FLAG_RELIABLE);
   
-  enet_peer_send(peer, 0, packet);
+  enet_peer_send(server_peer, 0, packet);
 }
 
-void GameClient::send_info(ENetPeer* peer, std::pair<float, float> mouse_pos) {
+void GameClient::send_info(std::pair<float, float> mouse_pos) {
   Packet<std::pair<float, float>> data = {.header = Header::MousePosition, .value=mouse_pos};
+  subscribe(&data, server_key, sizeof(data));
   ENetPacket* packet = enet_packet_create (&data,
                                            sizeof(data),
                                            ENET_PACKET_FLAG_UNRELIABLE_FRAGMENT);
 
-  enet_peer_send(peer, 1, packet);
+  enet_peer_send(server_peer, 1, packet);
 }
 
 void GameClient::draw(const std::vector<Entity> &entities) {
@@ -185,6 +187,13 @@ void GameClient::process_event(ENetEvent& event) {
       break;
     
     case ENET_EVENT_TYPE_RECEIVE: {
+      if (event.peer == lobby_peer) {
+        subscribe(event.packet->data, lobby_key, event.packet->dataLength);
+      }
+      else if (event.peer == server_peer) {
+        subscribe(event.packet->data, server_key, event.packet->dataLength);
+      }
+      
       Header head = *reinterpret_cast<Header*>(event.packet->data);
       
       if (head == Header::ClientAbout) {
@@ -221,6 +230,7 @@ void GameClient::process_event(ENetEvent& event) {
           std::cout << "Error: Connection to server failed" << std::endl;
   
           Packet<uint> data = {.header=Header::DisconnectRoom, .value=uint(room_id)};
+          subscribe(&data, lobby_key, sizeof(data));
           ENetPacket* packet = enet_packet_create (&data,
                                                    sizeof(data),
                                                    ENET_PACKET_FLAG_RELIABLE);
@@ -230,6 +240,7 @@ void GameClient::process_event(ENetEvent& event) {
           /* Wait up to 5 seconds for the connection attempt to succeed. */
           while (enet_host_service (client, & event, 5000) > 0 &&
                  event.type == ENET_EVENT_TYPE_RECEIVE) {
+            subscribe(event.packet->data, lobby_key, event.packet->dataLength);
             Header head = *reinterpret_cast<Header*>(event.packet->data);
             if (head == Header::ResultSuccess) {
               std::cout << "Info: Disconnection success" << std::endl;
@@ -254,11 +265,24 @@ void GameClient::process_event(ENetEvent& event) {
           break;
         }
   
+        if (enet_host_service (client, & event, 5000) > 0 &&
+            event.type == ENET_EVENT_TYPE_RECEIVE) {
+          Header head = *reinterpret_cast<Header*>(event.packet->data);
+          if (head != Header::Key) {
+            std::cout << "Error: Server didn't send key" << std::endl;
+          }
+          else {
+            server_key = int(reinterpret_cast<Packet<int>*>(event.packet->data)->value);
+          }
+          enet_packet_destroy(event.packet);
+        }
+  
         std::array<char, 64> name_array{};
         std::sprintf(name_array.data(), "%s", name.c_str());
         ClientInfo info = {.id = id, .name=name_array};
   
         Packet<ClientInfo> data = {.header = Header::ClientAbout, .value = info};
+        subscribe(&data, server_key, sizeof(data));
         ENetPacket *packet_res = enet_packet_create(&data,
                                                     sizeof(data),
                                                     ENET_PACKET_FLAG_RELIABLE);
@@ -314,9 +338,22 @@ void GameClient::Run() {
     if (enet_host_service (client, & event, 5000) > 0 &&
         event.type == ENET_EVENT_TYPE_CONNECT) {
       std::cout << "Info: Connected to lobby" << std::endl;
+  
+      if (enet_host_service (client, & event, 5000) > 0 &&
+          event.type == ENET_EVENT_TYPE_RECEIVE) {
+        Header head = *reinterpret_cast<Header*>(event.packet->data);
+        if (head != Header::Key) {
+          std::cout << "Error: Lobby didn't send key" << std::endl;
+        }
+        else {
+          lobby_key = int(reinterpret_cast<Packet<int>*>(event.packet->data)->value);
+        }
+        enet_packet_destroy(event.packet);
+      }
       
       if (enet_host_service (client, & event, 5000) > 0 &&
           event.type == ENET_EVENT_TYPE_RECEIVE) {
+        subscribe(event.packet->data, lobby_key, event.packet->dataLength);
         Header head = *reinterpret_cast<Header*>(event.packet->data);
         if (head != Header::ClientId) {
           std::cout << "Error: Lobby didn't send id" << std::endl;
@@ -332,6 +369,7 @@ void GameClient::Run() {
       ClientInfo info = {.id = id, .name=name_array};
   
       Packet<ClientInfo> data = {.header = Header::ClientAbout, .value = info};
+      subscribe(&data, lobby_key, sizeof(data));
       ENetPacket *packet_res = enet_packet_create(&data,
                                                   sizeof(data),
                                                   ENET_PACKET_FLAG_RELIABLE);
@@ -339,6 +377,7 @@ void GameClient::Run() {
   
       while (enet_host_service (client, & event, 5000) > 0 &&
              event.type == ENET_EVENT_TYPE_RECEIVE) {
+        subscribe(event.packet->data, lobby_key, event.packet->dataLength);
         Header head = *reinterpret_cast<Header *>(event.packet->data);
         if (head == Header::RoomList) {
           std::array<RoomInfo, 256> rooms = reinterpret_cast<Packet<std::array<RoomInfo, 256>>*>(event.packet->data)->value;
@@ -384,6 +423,7 @@ void GameClient::Run() {
         std::copy_n(room_name.c_str(), room_name.length(), info.name.data());
         
         Packet<RoomInfo> data = {.header=Header::NewRoomInfo, .value=info};
+        subscribe(&data, lobby_key, sizeof(data));
         ENetPacket* packet = enet_packet_create (&data,
                                                  sizeof(data),
                                                  ENET_PACKET_FLAG_RELIABLE);
@@ -393,6 +433,7 @@ void GameClient::Run() {
         /* Wait up to 5 seconds for the connection attempt to succeed. */
         while (enet_host_service (client, & event, 5000) > 0 &&
                event.type == ENET_EVENT_TYPE_RECEIVE) {
+          subscribe(event.packet->data, lobby_key, event.packet->dataLength);
           Header head = *reinterpret_cast<Header*>(event.packet->data);
           if (head == Header::ResultSuccess) {
             std::cout << "Info: Creation success" << std::endl;
@@ -412,6 +453,7 @@ void GameClient::Run() {
       }
       else if (input_string == "/rooms") {
         Packet<char> data = {.header=Header::RoomList};
+        subscribe(&data, lobby_key, sizeof(data));
         ENetPacket* packet = enet_packet_create (&data,
                                                  sizeof(data),
                                                  ENET_PACKET_FLAG_RELIABLE);
@@ -420,6 +462,7 @@ void GameClient::Run() {
   
         while (enet_host_service (client, & event, 5000) > 0 &&
                event.type == ENET_EVENT_TYPE_RECEIVE) {
+          subscribe(event.packet->data, lobby_key, event.packet->dataLength);
           Header head = *reinterpret_cast<Header *>(event.packet->data);
           if (head == Header::RoomList) {
             std::array<RoomInfo, 256> rooms = reinterpret_cast<Packet<std::array<RoomInfo, 256>>*>(event.packet->data)->value;
@@ -449,6 +492,7 @@ void GameClient::Run() {
         working_flag = 0;
         if (room_id != -1) {
           Packet<uint> data = {.header=Header::DisconnectRoom, .value=uint(room_id)};
+          subscribe(&data, lobby_key, sizeof(data));
           ENetPacket *packet = enet_packet_create(&data,
                                                   sizeof(data),
                                                   ENET_PACKET_FLAG_RELIABLE);
@@ -458,6 +502,7 @@ void GameClient::Run() {
           /* Wait up to 5 seconds for the connection attempt to succeed. */
           while (enet_host_service(client, &event, 5000) > 0 &&
                  event.type == ENET_EVENT_TYPE_RECEIVE) {
+            subscribe(event.packet->data, lobby_key, event.packet->dataLength);
             Header head = *reinterpret_cast<Header *>(event.packet->data);
             if (head == Header::ResultSuccess) {
               std::cout << "Info: Disconnection success" << std::endl;
@@ -486,6 +531,7 @@ void GameClient::Run() {
       }
       else if(input_string.starts_with("/connect ") && room_id == -1) {
         Packet<uint> data = {.header=Header::ConnectRoom, .value=uint(std::stoi(input_string.substr(9)))};
+        subscribe(&data, lobby_key, sizeof(data));
         ENetPacket* packet = enet_packet_create (&data,
                                                  sizeof(data),
                                                  ENET_PACKET_FLAG_RELIABLE);
@@ -495,6 +541,7 @@ void GameClient::Run() {
         /* Wait up to 5 seconds for the connection attempt to succeed. */
         while (enet_host_service (client, & event, 5000) > 0 &&
             event.type == ENET_EVENT_TYPE_RECEIVE) {
+          subscribe(event.packet->data, lobby_key, event.packet->dataLength);
           Header head = *reinterpret_cast<Header*>(event.packet->data);
           if (head == Header::ResultSuccess) {
             std::cout << "Info: Connection success" << std::endl;
@@ -514,6 +561,7 @@ void GameClient::Run() {
       }
       else if(input_string == "/disconnect" && room_id != -1) {
         Packet<uint> data = {.header=Header::DisconnectRoom, .value=uint(room_id)};
+        subscribe(&data, lobby_key, sizeof(data));
         ENetPacket* packet = enet_packet_create (&data,
                                                  sizeof(data),
                                                  ENET_PACKET_FLAG_RELIABLE);
@@ -523,6 +571,7 @@ void GameClient::Run() {
         /* Wait up to 5 seconds for the connection attempt to succeed. */
         while (enet_host_service (client, & event, 5000) > 0 &&
             event.type == ENET_EVENT_TYPE_RECEIVE) {
+          subscribe(event.packet->data, lobby_key, event.packet->dataLength);
           Header head = *reinterpret_cast<Header*>(event.packet->data);
           if (head == Header::ResultSuccess) {
             std::cout << "Info: Disconnection success" << std::endl;
@@ -550,7 +599,7 @@ void GameClient::Run() {
         creation_stage = true;
       }
       else if (in_game) {
-        send_message(input_string, server_peer);
+        send_message(input_string);
       }
     }
     
@@ -570,7 +619,7 @@ void GameClient::Run() {
         }
       }
       
-      send_info(server_peer, mouse_pos);
+      send_info(mouse_pos);
     }
     
     
