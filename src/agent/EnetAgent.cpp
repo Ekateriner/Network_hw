@@ -3,6 +3,7 @@
 #include <csignal>
 #include <iostream>
 #include <arpa/inet.h>
+#include "../common/Packet.h"
 
 EnetAgent::EnetAgent(uint32_t port) {
   struct sigaction action_term = {};
@@ -68,6 +69,7 @@ void EnetAgent::Run() {
                                                     ENET_PACKET_FLAG_RELIABLE);
   
             enet_peer_send(event.peer, 0, packet);
+            std::cout << "Info: Send port " << min_port << std::endl;
             min_port += 1;
           }
           enet_packet_destroy(event.packet);

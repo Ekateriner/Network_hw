@@ -41,7 +41,7 @@ private:
   };
   
   ENetHost* lobby;
-  uint start_level = 3;
+  uint start_level = 2;
   
   std::array<Agent, 1> agents = {Agent{.name="localhost", .port=7777}};
   std::unordered_map<ENetPeer*, int> clients_key;

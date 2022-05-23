@@ -83,11 +83,11 @@ void EnetLobby::process_event(ENetEvent& event) {
   
       {
         Packet<int> data = {.header=Header::Key, .value = clients_key[event.peer]};
-        ENetPacket *packet_res = enet_packet_create(&data,
-                                                    sizeof(data),
-                                                    ENET_PACKET_FLAG_RELIABLE);
+        ENetPacket *packet = enet_packet_create(&data,
+                                                sizeof(data),
+                                                ENET_PACKET_FLAG_RELIABLE);
   
-        enet_peer_send(event.peer, 0, packet_res);
+        enet_peer_send(event.peer, 0, packet);
       }
   
       {
@@ -305,12 +305,13 @@ void EnetLobby::Run() {
             std::copy_n(rooms[room_id].server.c_str(), rooms[room_id].server.length(), server_data.data());
             for (auto&[client_peer, info]: rooms[room_id].clients) {
               Packet<std::array<char, 32>> data = {.header = Header::ServerInfo, .value=server_data};
-              subscribe(&data, clients_key[event.peer], sizeof(data));
+              subscribe(&data, clients_key[client_peer], sizeof(data));
               ENetPacket *packet = enet_packet_create(&data,
                                                       sizeof(data),
                                                       ENET_PACKET_FLAG_RELIABLE);
               enet_peer_send(client_peer, 0, packet);
             }
+            std::cout << "Info: room " << room_id << " has server " << std::string(server_data.data()) << std::endl;
           }
           enet_packet_destroy(event.packet);
         }

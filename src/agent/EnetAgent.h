@@ -6,7 +6,6 @@
 #include <array>
 #include <vector>
 #include "../common/Room.h"
-#include "../common/Packet.h"
 
 class EnetAgent {
 public:

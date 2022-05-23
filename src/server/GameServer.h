@@ -22,17 +22,20 @@ private:
   void create_server(uint32_t port);
   void spawn_entities(uint32_t count);
   void spawn_user(int id);
+  void update_users();
   void update_AI();
   void check_cond();
   void wall_check();
   void add_new_client(ENetPeer* peer, const ClientInfo& info);
   void resend_message(ENetPeer* peer, const std::string&  message);
+  
   static int generate_key() {
     std::random_device rd;  // Will be used to obtain a seed for the random number engine
     std::mt19937 gen(rd()); // Standard mersenne_twister_engine seeded with rd()
     std::uniform_int_distribution<> rand_key(INT32_MIN, INT32_MAX);
     return rand_key(gen);
   }
+  
   static void handle_sigterm(int signum) {
     working_flag = 0;
   };
@@ -46,6 +49,7 @@ private:
   std::unordered_map<ENetPeer*, ClientInfo> clients;
   std::unordered_map<ENetPeer*, int> clients_key;
   std::unordered_map<ENetPeer*, uint32_t> clients_entities;
+  std::unordered_map<ENetPeer*, std::pair<float, float>> last_target;
   
   int height = 512;
   int weight = 1024;

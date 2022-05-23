@@ -61,9 +61,20 @@ void GameServer::spawn_user(int id) {
   std::mt19937 gen(rd()); // Standard mersenne_twister_engine seeded with rd()
   std::uniform_real_distribution<float> rand_x(0.0, weight);
   std::uniform_real_distribution<float> rand_y(0.0, height);
-  //entities.emplace_back();
   entities.push_back(Entity{.entity_id = static_cast<uint32_t>(entities.size()) + 1, .user_id = id,
                             .pos = std::make_pair(rand_x(gen), rand_y(gen)), .radius = radius, .target = 0});
+  
+}
+
+void GameServer::update_users() {
+  for(auto& [peer, target] : last_target) {
+    auto entity = &entities[clients_entities[peer]];
+    if (dist2(target, entity->pos) < 0.0001) {
+      continue;
+    }
+    std::pair<float, float> dir = (target - entity->pos) / dist(target, entity->pos);
+    entity->pos = entity->pos + dir * dt * velocity;
+  }
 }
 
 void GameServer::update_AI() {
@@ -154,15 +165,14 @@ void GameServer::add_new_client(ENetPeer* peer, const ClientInfo& info) {
   std::sprintf(temp.data(), "%x:%u", peer->address.host, peer->address.port);
   std::string client_addr = std::string(temp.data());
   spawn_user(info.id);
-  clients_entities[peer] = entities.size();
+  clients_entities[peer] = entities.size() - 1;
   clients[peer] = info;
-  
-  //generate kay
+  last_target[peer] = entities.back().pos;
   
   std::array<int, 2> game_info = {weight, height};
   
   Packet<std::array<int, 2>> data = {.header = Header::GameInfo, .value = game_info};
-  subscribe(&data, clients_key[peer], sizeof(data));
+  //subscribe(&data, clients_key[peer], sizeof(data));
   ENetPacket* packet = enet_packet_create (&data,
                                            sizeof(data),
                                            ENET_PACKET_FLAG_RELIABLE);
@@ -178,7 +188,7 @@ void GameServer::resend_message(ENetPeer* peer, const std::string& message) {
   for(auto [client_peer, info] : clients) {
     if (peer != client_peer) {
       Packet<std::array<char, 1024>> data = {.header=Header::ChatMessage, .value = text};
-      subscribe(&data, clients_key[client_peer], sizeof(data));
+      //subscribe(&data, clients_key[client_peer], sizeof(data));
       ENetPacket * packet = enet_packet_create (&data,
                                                 sizeof(data),
                                                 ENET_PACKET_FLAG_UNRELIABLE_FRAGMENT);
@@ -202,13 +212,13 @@ void GameServer::Run() {
           ENetPacket *packet_res = enet_packet_create(&data,
                                                       sizeof(data),
                                                       ENET_PACKET_FLAG_RELIABLE);
-  
           enet_peer_send(event.peer, 0, packet_res);
+          //enet_host_flush(server);
           break;
         }
         case ENET_EVENT_TYPE_RECEIVE:
         {
-          subscribe(event.packet->data, clients_key[event.peer], event.packet->dataLength);
+          //subscribe(event.packet->data, clients_key[event.peer], event.packet->dataLength);
           Header head = *reinterpret_cast<Header*>(event.packet->data);
           if (head == Header::ClientAbout) {
             ClientInfo info = reinterpret_cast<Packet<ClientInfo>*>(event.packet->data)->value;
@@ -225,11 +235,7 @@ void GameServer::Run() {
             resend_message(event.peer, message);
           }
           else if (head == Header::MousePosition) {
-            // get info
-            auto target = reinterpret_cast<Packet<std::pair<float, float>>*>(event.packet->data)->value;
-            auto entity = &entities[clients_entities[event.peer] - 1];
-            std::pair<float, float> dir = (target - entity->pos) / dist(target, entity->pos);
-            entity->pos = entity->pos + dir * dt * velocity;
+            last_target[event.peer] = reinterpret_cast<Packet<std::pair<float, float>>*>(event.packet->data)->value;
           }
           enet_packet_destroy(event.packet);
         }
@@ -240,7 +246,7 @@ void GameServer::Run() {
           std::array<char, 64> temp{};
           std::sprintf(temp.data(), "%x:%u", event.peer->address.host, event.peer->address.port);
           std::string client_addr = std::string(temp.data());
-          entities[clients_entities[event.peer] - 1].user_id = -1;
+          entities[clients_entities[event.peer]].user_id = -1;
           clients.erase(event.peer);
           clients_entities.erase(event.peer);
           std::cout << "Info: " << client_addr << " has disconnected" << std::endl;
@@ -254,6 +260,7 @@ void GameServer::Run() {
     }
     std::chrono::duration<double> elapsed_seconds = std::chrono::steady_clock::now()-start;
     if (!clients.empty()) {
+      update_users();
       update_AI();
       check_cond();
       wall_check();
@@ -262,7 +269,7 @@ void GameServer::Run() {
         std::array<Entity, 4048> entities_data{};
         std::copy_n(entities.data(), entities.size(), entities_data.data());
         Packet<std::array<Entity, 4048>> data = {.header = Header::Entities, .value = entities_data};
-        subscribe(&data, clients_key[client_peer], sizeof(data));
+        //subscribe(&data, clients_key[client_peer], sizeof(data));
         ENetPacket* packet = enet_packet_create (&data,
                                                  sizeof(data),
                                                  ENET_PACKET_FLAG_UNRELIABLE_FRAGMENT);
@@ -271,7 +278,7 @@ void GameServer::Run() {
       enet_host_flush(server);
       //std::cout << "Info: broadcasting" << std::endl;
     }
-    else if (elapsed_seconds.count() > 30) {
+    else if (elapsed_seconds.count() > 3000) {
       working_flag = 0;
       break;
     }

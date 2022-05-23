@@ -59,7 +59,8 @@ void GameClient::clean_game() {
 //    switch (event.type)
 //    {
 //      case ENET_EVENT_TYPE_RECEIVE:
-//        enet_packet_destroy(event.packet);
+//        enet_packet_destroy(
+//        packet);
 //        break;
 //      case ENET_EVENT_TYPE_DISCONNECT:
 //        return;
@@ -140,7 +141,7 @@ void GameClient::send_message(const std::string& message) {
   std::copy_n(message.c_str(), message.length(), server_data.data());
   
   Packet<std::array<char, 1024>> data = {.header = Header::ChatMessage, .value=server_data};
-  subscribe(&data, server_key, sizeof(data));
+  //subscribe(&data, server_key, sizeof(data));
   ENetPacket* packet = enet_packet_create (&data,
                                            sizeof(data),
                                            ENET_PACKET_FLAG_RELIABLE);
@@ -150,7 +151,7 @@ void GameClient::send_message(const std::string& message) {
 
 void GameClient::send_info(std::pair<float, float> mouse_pos) {
   Packet<std::pair<float, float>> data = {.header = Header::MousePosition, .value=mouse_pos};
-  subscribe(&data, server_key, sizeof(data));
+  //subscribe(&data, server_key, sizeof(data));
   ENetPacket* packet = enet_packet_create (&data,
                                            sizeof(data),
                                            ENET_PACKET_FLAG_UNRELIABLE_FRAGMENT);
@@ -191,7 +192,8 @@ void GameClient::process_event(ENetEvent& event) {
         subscribe(event.packet->data, lobby_key, event.packet->dataLength);
       }
       else if (event.peer == server_peer) {
-        subscribe(event.packet->data, server_key, event.packet->dataLength);
+        //std::cout << "Server packet" << std::endl;
+        //subscribe(event.packet->data, server_key, event.packet->dataLength);
       }
       
       Header head = *reinterpret_cast<Header*>(event.packet->data);
@@ -206,13 +208,12 @@ void GameClient::process_event(ENetEvent& event) {
       }
       else if (head == Header::ServerInfo) {
         std::string server_str(reinterpret_cast<Packet<std::array<char, 32>> *>(event.packet->data)->value.data());
-        std::cout << "Connect to server " << server_str << std::endl;
+        //std::cout << "Connect to server " << server_str << std::endl;
         uint del = server_str.find(':');
   
         ENetAddress address;
   
         enet_address_set_host(&address, server_str.substr(0, del).c_str());
-        std::cout << address.host << std::endl;
         address.port = stoul(server_str.substr(del + 1));
   
         server_peer = enet_host_connect(client, &address, 2, 0);
@@ -221,9 +222,10 @@ void GameClient::process_event(ENetEvent& event) {
           break;
         }
   
+        ENetEvent inner_event;
         /* Wait up to 5 seconds for the connection attempt to succeed. */
-        if (enet_host_service(client, &event, 5000) > 0 &&
-            event.type == ENET_EVENT_TYPE_CONNECT) {
+        if (enet_host_service(client, &inner_event, 5000) > 0 &&
+                inner_event.type == ENET_EVENT_TYPE_CONNECT) {
           std::cout << "Info: Connected to server" << std::endl;
         } else {
           enet_peer_reset(server_peer);
@@ -237,11 +239,12 @@ void GameClient::process_event(ENetEvent& event) {
   
           enet_peer_send(lobby_peer, 0, packet);
   
+          ENetEvent wait_event;
           /* Wait up to 5 seconds for the connection attempt to succeed. */
-          while (enet_host_service (client, & event, 5000) > 0 &&
-                 event.type == ENET_EVENT_TYPE_RECEIVE) {
-            subscribe(event.packet->data, lobby_key, event.packet->dataLength);
-            Header head = *reinterpret_cast<Header*>(event.packet->data);
+          while (enet_host_service (client, & wait_event, 5000) > 0 &&
+                  wait_event.type == ENET_EVENT_TYPE_RECEIVE) {
+            subscribe(wait_event.packet->data, lobby_key, wait_event.packet->dataLength);
+            Header head = *reinterpret_cast<Header*>(wait_event.packet->data);
             if (head == Header::ResultSuccess) {
               std::cout << "Info: Disconnection success" << std::endl;
               room_id = -1;
@@ -250,43 +253,45 @@ void GameClient::process_event(ENetEvent& event) {
                 clean_game();
                 in_game = false;
               }
-              enet_packet_destroy(event.packet);
+              enet_packet_destroy(wait_event.packet);
               break;
             }
             else if (head == Header::ResultFailed) {
               std::cout << "Info: Disconnection failed" << std::endl;
-              enet_packet_destroy(event.packet);
+              enet_packet_destroy(wait_event.packet);
               break;
             }
             else {
-              process_event(event);
+              process_event(wait_event);
             }
           }
           break;
         }
-  
-        if (enet_host_service (client, & event, 5000) > 0 &&
-            event.type == ENET_EVENT_TYPE_RECEIVE) {
-          Header head = *reinterpret_cast<Header*>(event.packet->data);
+        
+        if (enet_host_service (client, & inner_event, 5000) > 0 &&
+                inner_event.type == ENET_EVENT_TYPE_RECEIVE) {
+          Header head = *reinterpret_cast<Header*>(inner_event.packet->data);
           if (head != Header::Key) {
             std::cout << "Error: Server didn't send key" << std::endl;
           }
           else {
-            server_key = int(reinterpret_cast<Packet<int>*>(event.packet->data)->value);
+            //std::cout << "Info: got key" << std::endl;
+            server_key = reinterpret_cast<Packet<int>*>(event.packet->data)->value;
           }
-          enet_packet_destroy(event.packet);
+          enet_packet_destroy(inner_event.packet);
         }
-  
+        
         std::array<char, 64> name_array{};
         std::sprintf(name_array.data(), "%s", name.c_str());
         ClientInfo info = {.id = id, .name=name_array};
   
         Packet<ClientInfo> data = {.header = Header::ClientAbout, .value = info};
-        subscribe(&data, server_key, sizeof(data));
+        //subscribe(&data, server_key, sizeof(data));
         ENetPacket *packet_res = enet_packet_create(&data,
                                                     sizeof(data),
                                                     ENET_PACKET_FLAG_RELIABLE);
         enet_peer_send(server_peer, 0, packet_res);
+        //std::cout << "Info: send self clientInfo" << std::endl;
       }
       else if (head == Header::GameInfo) {
         auto info = reinterpret_cast<Packet<std::array<int, 2>>*>(event.packet->data)->value;
@@ -300,12 +305,15 @@ void GameClient::process_event(ENetEvent& event) {
         // get entities
         std::vector<Entity> to_draw;
         std::array<Entity, 4048> data = reinterpret_cast<Packet<std::array<Entity, 4048>> *> (event.packet->data)->value;
-        std::copy_if(data.begin(), data.end(), std::back_inserter(to_draw), [](Entity e) { return e.radius > 0.0001; });
+        std::copy_if(data.begin(), data.end(), std::back_inserter(to_draw), [](Entity& e) { return e.radius > 0.0001 || e.user_id != -1; });
         draw(to_draw);
       }
       else if (head == Header::ChatMessage) {
         std::string message(reinterpret_cast<Packet<std::array<char, 1024>> *> (event.packet->data)->value.data());
         std::cout << "Message: " << message << std::endl;
+      }
+      else {
+        std::cout << "Warn: Unknown packet" << std::endl;
       }
       enet_packet_destroy(event.packet);
     }
@@ -346,7 +354,7 @@ void GameClient::Run() {
           std::cout << "Error: Lobby didn't send key" << std::endl;
         }
         else {
-          lobby_key = int(reinterpret_cast<Packet<int>*>(event.packet->data)->value);
+          lobby_key = reinterpret_cast<Packet<int>*>(event.packet->data)->value;
         }
         enet_packet_destroy(event.packet);
       }
@@ -610,7 +618,7 @@ void GameClient::Run() {
         al_wait_for_event_timed(a_events, &a_event, 0);
         switch (a_event.type) {
           case ALLEGRO_EVENT_MOUSE_AXES:
-            mouse_pos = std::make_pair(a_event.mouse.x, a_event.mouse.y);
+            send_info(std::make_pair(a_event.mouse.x, a_event.mouse.y));
             break;
         
           case ALLEGRO_EVENT_TIMER:
@@ -618,8 +626,6 @@ void GameClient::Run() {
             break;
         }
       }
-      
-      send_info(mouse_pos);
     }
     
     

@@ -55,7 +55,6 @@ private:
   int room_id = -1;
   
   int id = -1;
-  std::pair<float, float> mouse_pos = std::make_pair(0, 0);
   std::unordered_map<int, std::string> others;
   bool creation_stage = false;
   
