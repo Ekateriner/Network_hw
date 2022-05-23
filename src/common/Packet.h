@@ -10,7 +10,7 @@ enum Header {
   RoomList, ClientId, ClientAbout, NewRoomInfo, DiscClientAbout,
   ServerInfo, ConnectRoom, DisconnectRoom, ResultSuccess, ResultFailed, // lobby
   ChatMessage, MousePosition, // client
-  GameInfo, Entities,  // server
+  GameInfo, Entities, ClientAnswer, // server
   Key
 };
 
@@ -20,7 +20,7 @@ struct Packet{
   T value;
 };
 
-void subscribe(void* data, int key, int len) {
+void subscribe(void* data, int key, size_t len) {
   for(auto [fragment, i] = std::tuple{reinterpret_cast<int*>(data), 0}; i < len; fragment += 1, i += sizeof(int)) {
     if (len - i < sizeof(int)) {
       *fragment = *fragment ^ (key & (1 << (sizeof(int) - len + i)));

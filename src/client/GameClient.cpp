@@ -7,6 +7,8 @@
 #include <sstream>
 #include "../common/Packet.h"
 
+#include <bitset>
+
 using namespace std::chrono_literals;
 
 GameClient::GameClient(std::string name, std::string lobby_name, uint32_t port) :
@@ -141,7 +143,7 @@ void GameClient::send_message(const std::string& message) {
   std::copy_n(message.c_str(), message.length(), server_data.data());
   
   Packet<std::array<char, 1024>> data = {.header = Header::ChatMessage, .value=server_data};
-  //subscribe(&data, server_key, sizeof(data));
+  subscribe(&data, server_key, sizeof(data));
   ENetPacket* packet = enet_packet_create (&data,
                                            sizeof(data),
                                            ENET_PACKET_FLAG_RELIABLE);
@@ -151,7 +153,7 @@ void GameClient::send_message(const std::string& message) {
 
 void GameClient::send_info(std::pair<float, float> mouse_pos) {
   Packet<std::pair<float, float>> data = {.header = Header::MousePosition, .value=mouse_pos};
-  //subscribe(&data, server_key, sizeof(data));
+  subscribe(&data, server_key, sizeof(data));
   ENetPacket* packet = enet_packet_create (&data,
                                            sizeof(data),
                                            ENET_PACKET_FLAG_UNRELIABLE_FRAGMENT);
@@ -159,14 +161,14 @@ void GameClient::send_info(std::pair<float, float> mouse_pos) {
   enet_peer_send(server_peer, 1, packet);
 }
 
-void GameClient::draw(const std::vector<Entity> &entities) {
+void GameClient::draw(const std::unordered_map<uint, Entity> &entities) {
   if (!redraw)
     return;
   al_clear_to_color(al_map_rgb(0, 0, 0));
-  for (auto entity : entities) {
+  for (auto& [_id, entity] : entities) {
     if (entity.user_id == -1) {
       al_draw_circle(entity.pos.first, entity.pos.second, entity.radius, al_map_rgb(0, 0, 255), 1);
-      al_draw_text(a_font, al_map_rgb(0, 0, 255), entity.pos.first-entity.radius / 2, entity.pos.second, 0, std::to_string(entity.entity_id).c_str());
+      al_draw_text(a_font, al_map_rgb(0, 0, 255), entity.pos.first-entity.radius / 2, entity.pos.second, 0, std::to_string(_id).c_str());
     }
     else if (entity.user_id == id) {
       al_draw_circle(entity.pos.first, entity.pos.second, entity.radius, al_map_rgb(0, 255, 0), 2);
@@ -192,8 +194,7 @@ void GameClient::process_event(ENetEvent& event) {
         subscribe(event.packet->data, lobby_key, event.packet->dataLength);
       }
       else if (event.peer == server_peer) {
-        //std::cout << "Server packet" << std::endl;
-        //subscribe(event.packet->data, server_key, event.packet->dataLength);
+        subscribe(event.packet->data, server_key, event.packet->dataLength);
       }
       
       Header head = *reinterpret_cast<Header*>(event.packet->data);
@@ -276,7 +277,7 @@ void GameClient::process_event(ENetEvent& event) {
           }
           else {
             //std::cout << "Info: got key" << std::endl;
-            server_key = reinterpret_cast<Packet<int>*>(event.packet->data)->value;
+            server_key = reinterpret_cast<Packet<int>*>(inner_event.packet->data)->value;
           }
           enet_packet_destroy(inner_event.packet);
         }
@@ -286,7 +287,7 @@ void GameClient::process_event(ENetEvent& event) {
         ClientInfo info = {.id = id, .name=name_array};
   
         Packet<ClientInfo> data = {.header = Header::ClientAbout, .value = info};
-        //subscribe(&data, server_key, sizeof(data));
+        subscribe(&data, server_key, sizeof(data));
         ENetPacket *packet_res = enet_packet_create(&data,
                                                     sizeof(data),
                                                     ENET_PACKET_FLAG_RELIABLE);
@@ -303,10 +304,38 @@ void GameClient::process_event(ENetEvent& event) {
       }
       else if (head == Header::Entities) {
         // get entities
-        std::vector<Entity> to_draw;
-        std::array<Entity, 4048> data = reinterpret_cast<Packet<std::array<Entity, 4048>> *> (event.packet->data)->value;
-        std::copy_if(data.begin(), data.end(), std::back_inserter(to_draw), [](Entity& e) { return e.radius > 0.0001 || e.user_id != -1; });
-        draw(to_draw);
+        std::pair<uint32_t, std::array<DeltaEntity, 4048>> data = reinterpret_cast<Packet<std::pair<uint32_t, std::array<DeltaEntity, 4048>>> *> (event.packet->data)->value;
+        for (auto& delta : data.second) {
+          if (delta.entity_id == 0) {
+            continue;
+          }
+          else {
+            if (!state.contains(delta.entity_id)) {
+              state[delta.entity_id] = Entity();
+            }
+            if (delta.field == Field::UserId) {
+              state[delta.entity_id].user_id = delta.value.int_x;
+            }
+            else if (delta.field == Field::Radius) {
+              state[delta.entity_id].radius = delta.value.fl_x;
+            }
+            else if (delta.field == Field::Position_X) {
+              state[delta.entity_id].pos.first = delta.value.fl_x;
+            }
+            else if (delta.field == Field::Position_Y) {
+              state[delta.entity_id].pos.second = delta.value.fl_x;
+            }
+          }
+        }
+        
+        Packet<uint32_t> packet_data = {.header = Header::ClientAnswer, .value = data.first};
+        subscribe(&packet_data, server_key, sizeof(packet_data));
+        ENetPacket *packet_res = enet_packet_create(&packet_data,
+                                                    sizeof(packet_data),
+                                                    ENET_PACKET_FLAG_UNRELIABLE_FRAGMENT);
+        enet_peer_send(server_peer, 1, packet_res);
+        
+        draw(state);
       }
       else if (head == Header::ChatMessage) {
         std::string message(reinterpret_cast<Packet<std::array<char, 1024>> *> (event.packet->data)->value.data());

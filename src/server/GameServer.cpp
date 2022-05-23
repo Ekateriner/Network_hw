@@ -52,23 +52,25 @@ void GameServer::spawn_entities(uint32_t count) {
   std::uniform_real_distribution<float> rand_r(radius / 2.0, radius);
   //entities.emplace_back();
   for (int i = 1; i <= count; i++) {
-    entities.push_back(Entity{.entity_id = static_cast<uint32_t>(i), .user_id = -1, .pos = std::make_pair(rand_x(gen), rand_y(gen)), .radius = rand_r(gen), .target = 0});
+    entities[current_ts][static_cast<uint32_t>(entities[current_ts].size()) + 1] = Entity{.user_id = -1,
+                                          .pos = std::make_pair(rand_x(gen), rand_y(gen)), .radius = rand_r(gen), .target = 0};
   }
 }
 
-void GameServer::spawn_user(int id) {
+uint32_t GameServer::spawn_user(int id) {
   std::random_device rd;  // Will be used to obtain a seed for the random number engine
   std::mt19937 gen(rd()); // Standard mersenne_twister_engine seeded with rd()
   std::uniform_real_distribution<float> rand_x(0.0, weight);
   std::uniform_real_distribution<float> rand_y(0.0, height);
-  entities.push_back(Entity{.entity_id = static_cast<uint32_t>(entities.size()) + 1, .user_id = id,
-                            .pos = std::make_pair(rand_x(gen), rand_y(gen)), .radius = radius, .target = 0});
-  
+  uint32_t _id = static_cast<uint32_t>(entities[current_ts].size()) + 1;
+  entities[current_ts][_id] = Entity{.user_id = id,
+                                        .pos = std::make_pair(rand_x(gen), rand_y(gen)), .radius = radius, .target = 0};
+  return _id;
 }
 
 void GameServer::update_users() {
   for(auto& [peer, target] : last_target) {
-    auto entity = &entities[clients_entities[peer]];
+    auto entity = &entities[current_ts][clients_entities[peer]];
     if (dist2(target, entity->pos) < 0.0001) {
       continue;
     }
@@ -78,46 +80,46 @@ void GameServer::update_users() {
 }
 
 void GameServer::update_AI() {
-  for (auto& entity1 : entities) {
+  for (auto& [_id1, entity1] : entities[current_ts]) {
     if (entity1.user_id != -1)
       continue;
     
     float eat_dist = height * height + weight * weight;
-    float eat_id = entity1.entity_id;
+    uint eat_id = _id1;
     
     float predator_dist = height * height + weight * weight;
-    float predator_id = entity1.entity_id;
+    uint predator_id = _id1;
     
-    for (const auto& entity2 : entities) {
-      if (entity1.entity_id != entity2.entity_id && entity1.radius > entity2.radius && dist2(entity1.pos, entity2.pos) < eat_dist) {
+    for (const auto& [_id2, entity2] : entities[current_ts]) {
+      if (_id1 != _id2 && entity1.radius > entity2.radius && dist2(entity1.pos, entity2.pos) < eat_dist) {
         eat_dist = dist2(entity1.pos, entity2.pos);
-        eat_id = entity2.entity_id;
+        eat_id = _id2;
       }
       
-      if (entity1.entity_id != entity2.entity_id && entity1.radius < entity2.radius && dist2(entity1.pos, entity2.pos) < predator_dist) {
+      if (_id1 != _id2 && entity1.radius < entity2.radius && dist2(entity1.pos, entity2.pos) < predator_dist) {
         predator_dist = dist2(entity1.pos, entity2.pos);
-        predator_id = entity2.entity_id;
+        predator_id = _id2;
       }
     }
     
     if (eat_dist < predator_dist) {
-      entity1.target = eat_id;
+      entity1.target = int(eat_id);
     }
     else {
-      entity1.target = -predator_id;
+      entity1.target = -int(predator_id);
     }
   }
   
-  for (auto& entity : entities) {
+  for (auto& [_id, entity] : entities[current_ts]) {
     if (entity.user_id != -1)
       continue;
     
     if (entity.target > 0) {
-      std::pair<float, float> dir = (entities[entity.target - 1].pos - entity.pos) / dist(entities[entity.target - 1].pos, entity.pos);
+      std::pair<float, float> dir = (entities[current_ts][entity.target].pos - entity.pos) / dist(entities[current_ts][entity.target].pos, entity.pos);
       entity.pos = entity.pos + dir * dt;
     }
     else if (entity.target < 0) {
-      std::pair<float, float> dir = (entities[-entity.target - 1].pos - entity.pos) / dist(entities[-entity.target - 1].pos, entity.pos);
+      std::pair<float, float> dir = (entities[current_ts][-entity.target].pos - entity.pos) / dist(entities[current_ts][-entity.target].pos, entity.pos);
       entity.pos = entity.pos - dir * dt;
     }
   }
@@ -129,9 +131,9 @@ void GameServer::check_cond() {
   std::uniform_real_distribution<float> rand_x(0.0, weight);
   std::uniform_real_distribution<float> rand_y(0.0, height);
   
-  for (auto& entity1 : entities) {
-    for (auto& entity2 : entities) {
-      if (entity1.entity_id != entity2.entity_id && entity1.radius > entity2.radius &&
+  for (auto& [_id1, entity1] : entities[current_ts]) {
+    for (auto& [_id2, entity2] : entities[current_ts]) {
+      if (_id1 != _id2 && entity1.radius > entity2.radius &&
           dist2(entity1.pos, entity2.pos) < (entity1.radius - entity2.radius) * (entity1.radius - entity2.radius)) {
         // 1 eats 2
         entity1.radius += entity2.radius / 2;
@@ -143,7 +145,7 @@ void GameServer::check_cond() {
 }
 
 void GameServer::wall_check() {
-  for (auto& entity : entities) {
+  for (auto& [_id, entity] : entities[current_ts]) {
     if (entity.pos.first - entity.radius < 0) {
       entity.pos.first = entity.radius;
     }
@@ -164,15 +166,15 @@ void GameServer::add_new_client(ENetPeer* peer, const ClientInfo& info) {
   std::array<char, 64> temp{};
   std::sprintf(temp.data(), "%x:%u", peer->address.host, peer->address.port);
   std::string client_addr = std::string(temp.data());
-  spawn_user(info.id);
-  clients_entities[peer] = entities.size() - 1;
+  uint32_t _id = spawn_user(info.id);
+  clients_entities[peer] = _id;
   clients[peer] = info;
-  last_target[peer] = entities.back().pos;
+  last_target[peer] = entities[current_ts][_id].pos;
   
   std::array<int, 2> game_info = {weight, height};
   
   Packet<std::array<int, 2>> data = {.header = Header::GameInfo, .value = game_info};
-  //subscribe(&data, clients_key[peer], sizeof(data));
+  subscribe(&data, clients_key[peer], sizeof(data));
   ENetPacket* packet = enet_packet_create (&data,
                                            sizeof(data),
                                            ENET_PACKET_FLAG_RELIABLE);
@@ -188,7 +190,7 @@ void GameServer::resend_message(ENetPeer* peer, const std::string& message) {
   for(auto [client_peer, info] : clients) {
     if (peer != client_peer) {
       Packet<std::array<char, 1024>> data = {.header=Header::ChatMessage, .value = text};
-      //subscribe(&data, clients_key[client_peer], sizeof(data));
+      subscribe(&data, clients_key[client_peer], sizeof(data));
       ENetPacket * packet = enet_packet_create (&data,
                                                 sizeof(data),
                                                 ENET_PACKET_FLAG_UNRELIABLE_FRAGMENT);
@@ -201,24 +203,27 @@ void GameServer::resend_message(ENetPeer* peer, const std::string& message) {
 
 void GameServer::Run() {
   auto start = std::chrono::steady_clock::now();
+  entities[current_ts] = std::unordered_map<uint32_t, Entity>();
   ENetEvent event;
   spawn_entities(10);
   while(working_flag) {
-    while (enet_host_service(server, &event, 10) > 0) {
+    while (enet_host_service(server, &event, 100) > 0) {
       switch (event.type) {
         case ENET_EVENT_TYPE_CONNECT: {
-          clients_key[event.peer] = generate_key();
-          Packet<int> data = {.header=Header::Key, .value = clients_key[event.peer]};
-          ENetPacket *packet_res = enet_packet_create(&data,
-                                                      sizeof(data),
-                                                      ENET_PACKET_FLAG_RELIABLE);
-          enet_peer_send(event.peer, 0, packet_res);
+          clients_key[event.peer] = 0;//generate_key();
+          {
+            Packet<int> data = {.header=Header::Key, .value = clients_key[event.peer]};
+            ENetPacket *packet = enet_packet_create(&data,
+                                                    sizeof(data),
+                                                    ENET_PACKET_FLAG_RELIABLE);
+            enet_peer_send(event.peer, 0, packet);
+          }
           //enet_host_flush(server);
           break;
         }
         case ENET_EVENT_TYPE_RECEIVE:
         {
-          //subscribe(event.packet->data, clients_key[event.peer], event.packet->dataLength);
+          subscribe(event.packet->data, clients_key[event.peer], event.packet->dataLength);
           Header head = *reinterpret_cast<Header*>(event.packet->data);
           if (head == Header::ClientAbout) {
             ClientInfo info = reinterpret_cast<Packet<ClientInfo>*>(event.packet->data)->value;
@@ -237,6 +242,14 @@ void GameServer::Run() {
           else if (head == Header::MousePosition) {
             last_target[event.peer] = reinterpret_cast<Packet<std::pair<float, float>>*>(event.packet->data)->value;
           }
+          else if (head == Header::ClientAnswer) {
+            last_ts[event.peer] = reinterpret_cast<Packet<uint32_t>*>(event.packet->data)->value;
+            auto min_ts = std::min_element(last_ts.begin(), last_ts.end(), [](auto& el1, auto& el2) { return el1.second < el2.second; } )->second;
+            std::erase_if(entities, [&min_ts] (const auto& item) {
+              auto const& [key, value] = item;
+              return key < min_ts;
+            });
+          }
           enet_packet_destroy(event.packet);
         }
           break;
@@ -246,7 +259,7 @@ void GameServer::Run() {
           std::array<char, 64> temp{};
           std::sprintf(temp.data(), "%x:%u", event.peer->address.host, event.peer->address.port);
           std::string client_addr = std::string(temp.data());
-          entities[clients_entities[event.peer]].user_id = -1;
+          entities[current_ts][clients_entities[event.peer]].user_id = -1;
           clients.erase(event.peer);
           clients_entities.erase(event.peer);
           std::cout << "Info: " << client_addr << " has disconnected" << std::endl;
@@ -258,24 +271,60 @@ void GameServer::Run() {
           break;
       }
     }
-    std::chrono::duration<double> elapsed_seconds = std::chrono::steady_clock::now()-start;
+    std::chrono::duration<double> elapsed_seconds = std::chrono::steady_clock::now() - start;
     if (!clients.empty()) {
       update_users();
       update_AI();
       check_cond();
       wall_check();
       
-      for(auto [client_peer, info] : clients) {
-        std::array<Entity, 4048> entities_data{};
-        std::copy_n(entities.data(), entities.size(), entities_data.data());
-        Packet<std::array<Entity, 4048>> data = {.header = Header::Entities, .value = entities_data};
-        //subscribe(&data, clients_key[client_peer], sizeof(data));
-        ENetPacket* packet = enet_packet_create (&data,
-                                                 sizeof(data),
+      for(auto& [client_peer, info] : clients) {
+        std::array<DeltaEntity, 4048> data{};
+        int ind = 0;
+        for (auto& [_id, entity] : entities[current_ts]) {
+          if (!last_ts.contains(client_peer) || !entities[last_ts[client_peer]].contains(_id)) {
+            // its new entity
+            data[ind].entity_id = _id; data[ind].field = Field::Position_X; data[ind].value.fl_x = entity.pos.first;
+            ind += 1;
+            data[ind].entity_id = _id; data[ind].field = Field::Position_Y; data[ind].value.fl_x = entity.pos.second;
+            ind += 1;
+            data[ind].entity_id = _id; data[ind].field = Field::Radius; data[ind].value.fl_x = entity.radius;
+            ind += 1;
+            data[ind].entity_id = _id; data[ind].field = Field::UserId; data[ind].value.int_x = entity.user_id;
+            ind += 1;
+          }
+          else {
+            Entity prev_entity = entities[last_ts[client_peer]][_id];
+            if (prev_entity.pos.first != entity.pos.first) {
+              data[ind].entity_id = _id; data[ind].field = Field::Position_X; data[ind].value.fl_x = entity.pos.first;
+              ind += 1;
+            }
+            if (prev_entity.pos.second != entity.pos.second) {
+              data[ind].entity_id = _id; data[ind].field = Field::Position_Y; data[ind].value.fl_x = entity.pos.second;
+              ind += 1;
+            }
+            if (prev_entity.radius != entity.radius) {
+              data[ind].entity_id = _id; data[ind].field = Field::Radius; data[ind].value.fl_x = entity.radius;
+              ind += 1;
+            }
+            if (prev_entity.user_id != entity.user_id) {
+              data[ind].entity_id = _id; data[ind].field = Field::UserId; data[ind].value.int_x = entity.user_id;
+              ind += 1;
+            }
+            
+          }
+        }
+        Packet<std::pair<uint32_t, std::array<DeltaEntity, 4048>>> packet_data = {.header = Header::Entities, .value = std::make_pair(current_ts, data)};
+        subscribe(&packet_data, clients_key[client_peer], sizeof(packet_data));
+        ENetPacket* packet = enet_packet_create (&packet_data,
+                                                 sizeof(packet_data),
                                                  ENET_PACKET_FLAG_UNRELIABLE_FRAGMENT);
         enet_peer_send(client_peer, 1, packet);
       }
       enet_host_flush(server);
+      
+      current_ts += 1;
+      entities[current_ts] = entities[current_ts - 1];
       //std::cout << "Info: broadcasting" << std::endl;
     }
     else if (elapsed_seconds.count() > 3000) {

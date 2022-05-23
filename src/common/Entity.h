@@ -7,7 +7,7 @@
 #include <cmath>
 
 struct Entity {
-  uint32_t entity_id;
+  //uint32_t entity_id;
   int user_id; // -1 - AI
   std::pair<float, float> pos;
   
@@ -29,6 +29,24 @@ struct Entity {
 //    radius(_radius),
 //    target(_target)
 //  {}
+};
+
+enum Field {
+  UserId,
+  Position_X,
+  Position_Y,
+  Radius
+};
+
+union Value {
+  float fl_x;
+  int int_x;
+};
+
+struct DeltaEntity {
+  uint32_t entity_id;
+  Field field;
+  Value value;
 };
 
 inline float dist(const std::pair<float, float>& pos1, const std::pair<float, float>& pos2) {
