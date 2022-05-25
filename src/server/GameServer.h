@@ -54,7 +54,7 @@ private:
   
   int height = 512;
   int weight = 1024;
-  std::unordered_map<uint32_t, std::unordered_map<uint32_t, Entity>> entities;
+  std::unordered_map<uint32_t, std::vector<Entity>> entities;
   uint32_t  current_ts = 0;
   
   const float dt = 0.1;

@@ -27,7 +27,7 @@ private:
   void create_peer();
   void send_message(const std::string& message);
   void send_info(std::pair<float, float> mouse_pos);
-  void draw(const std::unordered_map<uint, Entity>& entities);
+  void draw(const std::vector<Entity>& entities);
   void init_allegro();
   void process_event(ENetEvent& event);
   void clean_game();
@@ -67,7 +67,7 @@ private:
   
   int weight;
   int height;
-  std::unordered_map<uint, Entity> state;
+  std::vector<Entity> state;
   bool redraw = true;
   
   int lobby_key = 0;

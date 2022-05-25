@@ -8,12 +8,10 @@
 
 struct Entity {
   //uint32_t entity_id;
-  int user_id; // -1 - AI
+  int32_t user_id; // -1 - AI
   std::pair<float, float> pos;
   
   float radius;
-  int target; //for AI
-  
 //  Entity() {
 //    entity_id = 0;
 //    user_id = -1;
@@ -47,6 +45,48 @@ struct DeltaEntity {
   uint32_t entity_id;
   Field field;
   Value value;
+};
+
+class BitVector {
+public:
+  BitVector() = default;
+  
+  BitVector(char* begin, char* end):
+    data_vector(begin, end),
+    counter(0) {
+  }
+    
+  void push_back(bool val) {
+    if (counter == 0) {
+      data_vector.push_back(0);
+    }
+    data_vector[data_vector.size() - 1] = char(int(data_vector[data_vector.size() - 1]) | (int(val) << counter));
+    counter = (counter + 1) % 8;
+  }
+  
+  char* data() {
+    return data_vector.data();
+  }
+  
+  size_t size() {
+    return data_vector.size();
+  }
+  
+  size_t bit_size() {
+    return data_vector.size() * 8 - (counter > 0) + counter;
+  }
+  
+  bool operator[](size_t ind) {
+    size_t outer_ind = ind / 8;
+    size_t inner_ind = ind % 8;
+    
+    return bool((int(data_vector[outer_ind]) >> inner_ind) % 2);
+  }
+  
+private:
+  std::vector<char> data_vector;
+  int counter = 0;
+  //size_t _size = 0;
 };
 
 inline float dist(const std::pair<float, float>& pos1, const std::pair<float, float>& pos2) {

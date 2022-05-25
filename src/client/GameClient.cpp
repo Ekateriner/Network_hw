@@ -161,11 +161,12 @@ void GameClient::send_info(std::pair<float, float> mouse_pos) {
   enet_peer_send(server_peer, 1, packet);
 }
 
-void GameClient::draw(const std::unordered_map<uint, Entity> &entities) {
+void GameClient::draw(const std::vector<Entity> &entities) {
   if (!redraw)
     return;
   al_clear_to_color(al_map_rgb(0, 0, 0));
-  for (auto& [_id, entity] : entities) {
+  for (size_t _id = 0; _id < state.size(); _id++) {
+    Entity& entity = state[_id];
     if (entity.user_id == -1) {
       al_draw_circle(entity.pos.first, entity.pos.second, entity.radius, al_map_rgb(0, 0, 255), 1);
       al_draw_text(a_font, al_map_rgb(0, 0, 255), entity.pos.first-entity.radius / 2, entity.pos.second, 0, std::to_string(_id).c_str());
@@ -195,6 +196,7 @@ void GameClient::process_event(ENetEvent& event) {
       }
       else if (event.peer == server_peer) {
         subscribe(event.packet->data, server_key, event.packet->dataLength);
+        //std::cout << Header::Entities << " " << *reinterpret_cast<Header*>(event.packet->data)  << std::endl;
       }
       
       Header head = *reinterpret_cast<Header*>(event.packet->data);
@@ -303,32 +305,71 @@ void GameClient::process_event(ENetEvent& event) {
         in_game = true;
       }
       else if (head == Header::Entities) {
-        // get entities
-        std::pair<uint32_t, std::array<DeltaEntity, 4048>> data = reinterpret_cast<Packet<std::pair<uint32_t, std::array<DeltaEntity, 4048>>> *> (event.packet->data)->value;
-        for (auto& delta : data.second) {
-          if (delta.entity_id == 0) {
-            continue;
+        BitVector data(reinterpret_cast<char *> (event.packet->data), reinterpret_cast<char*>(event.packet->data) + event.packet->dataLength);
+        size_t entity_ind = 0;
+        for (size_t ind = sizeof(Header) * 8 + 32; ind < data.bit_size();) {
+          if (data[ind] && entity_ind >= state.size()) {
+            state.emplace_back();
+          }
+          if (data[ind]) {
+            ind += 1;
+            std::bitset<32> value;
+            for(size_t i = 0; i < 32; i++)
+              value[i] = data[ind + i];
+            ind += 32;
+            uint uval = value.to_ulong();
+            state[entity_ind].user_id = (*reinterpret_cast<int32_t *>(&uval));
           }
           else {
-            if (!state.contains(delta.entity_id)) {
-              state[delta.entity_id] = Entity();
-            }
-            if (delta.field == Field::UserId) {
-              state[delta.entity_id].user_id = delta.value.int_x;
-            }
-            else if (delta.field == Field::Radius) {
-              state[delta.entity_id].radius = delta.value.fl_x;
-            }
-            else if (delta.field == Field::Position_X) {
-              state[delta.entity_id].pos.first = delta.value.fl_x;
-            }
-            else if (delta.field == Field::Position_Y) {
-              state[delta.entity_id].pos.second = delta.value.fl_x;
-            }
+            ind += 1;
           }
+          
+          if (data[ind]) {
+            ind += 1;
+            std::bitset<32> value;
+            for(size_t i = 0; i < 32; i++)
+              value[i] = data[ind + i];
+            ind += 32;
+            uint uval = value.to_ulong();
+            state[entity_ind].pos.first = (*reinterpret_cast<float*>(&uval));
+          }
+          else {
+            ind += 1;
+          }
+  
+          if (data[ind]) {
+            ind += 1;
+            std::bitset<32> value;
+            for(size_t i = 0; i < 32; i++)
+              value[i] = data[ind + i];
+            ind += 32;
+            uint uval = value.to_ulong();
+            state[entity_ind].pos.second = (*reinterpret_cast<float*>(&uval));
+          }
+          else {
+            ind += 1;
+          }
+  
+          if (data[ind]) {
+            ind += 1;
+            std::bitset<32> value;
+            for(size_t i = 0; i < 32; i++)
+              value[i] = data[ind + i];
+            ind += 32;
+            uint uval = value.to_ulong();
+            state[entity_ind].radius = (*reinterpret_cast<float*>(&uval));
+          }
+          else {
+            ind += 1;
+          }
+          entity_ind += 1;
         }
+  
+        std::bitset<32> epoch;
+        for(size_t i = 0; i < 32; i++)
+            epoch[i] = data[sizeof(Header) * 8 + i];
         
-        Packet<uint32_t> packet_data = {.header = Header::ClientAnswer, .value = data.first};
+        Packet<uint32_t> packet_data = {.header = Header::ClientAnswer, .value = uint32_t(epoch.to_ulong())};
         subscribe(&packet_data, server_key, sizeof(packet_data));
         ENetPacket *packet_res = enet_packet_create(&packet_data,
                                                     sizeof(packet_data),

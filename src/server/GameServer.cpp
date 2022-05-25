@@ -4,6 +4,7 @@
 #include <random>
 #include <cstring>
 #include <chrono>
+#include <bitset>
 #include "../common/Packet.h"
 
 GameServer::GameServer(uint32_t port, float _radius, float _velocity):
@@ -51,9 +52,9 @@ void GameServer::spawn_entities(uint32_t count) {
   std::uniform_real_distribution<float> rand_y(0.0, height);
   std::uniform_real_distribution<float> rand_r(radius / 2.0, radius);
   //entities.emplace_back();
-  for (int i = 1; i <= count; i++) {
-    entities[current_ts][static_cast<uint32_t>(entities[current_ts].size()) + 1] = Entity{.user_id = -1,
-                                          .pos = std::make_pair(rand_x(gen), rand_y(gen)), .radius = rand_r(gen), .target = 0};
+  for (int i = 0; i < count; i++) {
+    entities[current_ts].push_back(Entity{.user_id = -1,
+                                          .pos = std::make_pair(rand_x(gen), rand_y(gen)), .radius = rand_r(gen)});
   }
 }
 
@@ -62,9 +63,9 @@ uint32_t GameServer::spawn_user(int id) {
   std::mt19937 gen(rd()); // Standard mersenne_twister_engine seeded with rd()
   std::uniform_real_distribution<float> rand_x(0.0, weight);
   std::uniform_real_distribution<float> rand_y(0.0, height);
-  uint32_t _id = static_cast<uint32_t>(entities[current_ts].size()) + 1;
-  entities[current_ts][_id] = Entity{.user_id = id,
-                                        .pos = std::make_pair(rand_x(gen), rand_y(gen)), .radius = radius, .target = 0};
+  auto _id = static_cast<uint32_t>(entities[current_ts].size());
+  entities[current_ts].push_back(Entity{.user_id = id,
+                                        .pos = std::make_pair(rand_x(gen), rand_y(gen)), .radius = radius});
   return _id;
 }
 
@@ -80,7 +81,10 @@ void GameServer::update_users() {
 }
 
 void GameServer::update_AI() {
-  for (auto& [_id1, entity1] : entities[current_ts]) {
+  std::vector<int> targets(entities[current_ts].size(), 0);
+  for (size_t _id1 = 0; _id1 < entities[current_ts].size(); _id1++) {
+    Entity& entity1 = entities[current_ts][_id1];
+    
     if (entity1.user_id != -1)
       continue;
     
@@ -89,8 +93,9 @@ void GameServer::update_AI() {
     
     float predator_dist = height * height + weight * weight;
     uint predator_id = _id1;
-    
-    for (const auto& [_id2, entity2] : entities[current_ts]) {
+  
+    for (size_t _id2 = 0; _id2 < entities[current_ts].size(); _id2++) {
+      Entity& entity2 = entities[current_ts][_id2];
       if (_id1 != _id2 && entity1.radius > entity2.radius && dist2(entity1.pos, entity2.pos) < eat_dist) {
         eat_dist = dist2(entity1.pos, entity2.pos);
         eat_id = _id2;
@@ -103,23 +108,24 @@ void GameServer::update_AI() {
     }
     
     if (eat_dist < predator_dist) {
-      entity1.target = int(eat_id);
+      targets[_id1] = int(eat_id + 1);
     }
     else {
-      entity1.target = -int(predator_id);
+      targets[_id1] = -int(predator_id + 1);
     }
   }
   
-  for (auto& [_id, entity] : entities[current_ts]) {
+  for (size_t _id = 0; _id < entities[current_ts].size(); _id++) {
+    Entity& entity = entities[current_ts][_id];
     if (entity.user_id != -1)
       continue;
     
-    if (entity.target > 0) {
-      std::pair<float, float> dir = (entities[current_ts][entity.target].pos - entity.pos) / dist(entities[current_ts][entity.target].pos, entity.pos);
+    if (targets[_id] > 0) {
+      std::pair<float, float> dir = (entities[current_ts][targets[_id]-1].pos - entity.pos) / dist(entities[current_ts][targets[_id]-1].pos, entity.pos);
       entity.pos = entity.pos + dir * dt;
     }
-    else if (entity.target < 0) {
-      std::pair<float, float> dir = (entities[current_ts][-entity.target].pos - entity.pos) / dist(entities[current_ts][-entity.target].pos, entity.pos);
+    else if (targets[_id] < 0) {
+      std::pair<float, float> dir = (entities[current_ts][-targets[_id]-1].pos - entity.pos) / dist(entities[current_ts][-targets[_id]-1].pos, entity.pos);
       entity.pos = entity.pos - dir * dt;
     }
   }
@@ -131,8 +137,10 @@ void GameServer::check_cond() {
   std::uniform_real_distribution<float> rand_x(0.0, weight);
   std::uniform_real_distribution<float> rand_y(0.0, height);
   
-  for (auto& [_id1, entity1] : entities[current_ts]) {
-    for (auto& [_id2, entity2] : entities[current_ts]) {
+  for (size_t _id1 = 0; _id1 < entities[current_ts].size(); _id1++) {
+    for (size_t _id2 = 0; _id2 < entities[current_ts].size(); _id2++) {
+      Entity& entity1 = entities[current_ts][_id1];
+      Entity& entity2 = entities[current_ts][_id2];
       if (_id1 != _id2 && entity1.radius > entity2.radius &&
           dist2(entity1.pos, entity2.pos) < (entity1.radius - entity2.radius) * (entity1.radius - entity2.radius)) {
         // 1 eats 2
@@ -145,7 +153,7 @@ void GameServer::check_cond() {
 }
 
 void GameServer::wall_check() {
-  for (auto& [_id, entity] : entities[current_ts]) {
+  for (auto& entity : entities[current_ts]) {
     if (entity.pos.first - entity.radius < 0) {
       entity.pos.first = entity.radius;
     }
@@ -203,7 +211,7 @@ void GameServer::resend_message(ENetPeer* peer, const std::string& message) {
 
 void GameServer::Run() {
   auto start = std::chrono::steady_clock::now();
-  entities[current_ts] = std::unordered_map<uint32_t, Entity>();
+  entities[current_ts] = std::vector<Entity>();
   ENetEvent event;
   spawn_entities(10);
   while(working_flag) {
@@ -279,45 +287,82 @@ void GameServer::Run() {
       wall_check();
       
       for(auto& [client_peer, info] : clients) {
-        std::array<DeltaEntity, 4048> data{};
+        BitVector data;
+        std::bitset<sizeof(Header)*8> head(Header::Entities);
+        for (int i = 0; i < sizeof(Header)*8; i++)
+          data.push_back(head[i]);
+        std::bitset<32> epoch(current_ts);
+        for (int i = 0; i < 32; i++)
+          data.push_back(epoch[i]);
         int ind = 0;
-        for (auto& [_id, entity] : entities[current_ts]) {
-          if (!last_ts.contains(client_peer) || !entities[last_ts[client_peer]].contains(_id)) {
+        for (auto& entity : entities[current_ts]) {
+          if (!last_ts.contains(client_peer) || ind >= entities[last_ts[client_peer]].size()) {
             // its new entity
-            data[ind].entity_id = _id; data[ind].field = Field::Position_X; data[ind].value.fl_x = entity.pos.first;
-            ind += 1;
-            data[ind].entity_id = _id; data[ind].field = Field::Position_Y; data[ind].value.fl_x = entity.pos.second;
-            ind += 1;
-            data[ind].entity_id = _id; data[ind].field = Field::Radius; data[ind].value.fl_x = entity.radius;
-            ind += 1;
-            data[ind].entity_id = _id; data[ind].field = Field::UserId; data[ind].value.int_x = entity.user_id;
-            ind += 1;
+            std::bitset<32> value;
+            value = std::bitset<32>(*reinterpret_cast<unsigned long *>(&entity.user_id));
+            data.push_back(true);
+            for (int i = 0; i < 32; i++)
+              data.push_back(value[i]);
+  
+            value = std::bitset<32>(*reinterpret_cast<unsigned long *>(&entity.pos.first));
+            data.push_back(true);
+            for (int i = 0; i < 32; i++)
+              data.push_back(value[i]);
+  
+            value = std::bitset<32>(*reinterpret_cast<unsigned long *>(&entity.pos.second));
+            data.push_back(true);
+            for (int i = 0; i < 32; i++)
+              data.push_back(value[i]);
+  
+            value = std::bitset<32>(*reinterpret_cast<unsigned long *>(&entity.radius));
+            data.push_back(true);
+            for (int i = 0; i < 32; i++)
+              data.push_back(value[i]);
           }
           else {
-            Entity prev_entity = entities[last_ts[client_peer]][_id];
+            Entity prev_entity = entities[last_ts[client_peer]][ind];
+            if (prev_entity.user_id != entity.user_id) {
+              std::bitset<32>value (*reinterpret_cast<unsigned long *>(&entity.user_id));
+              data.push_back(true);
+              for (int i = 0; i < 32; i++)
+                data.push_back(value[i]);
+            }
+            else {
+              data.push_back(false);
+            }
             if (prev_entity.pos.first != entity.pos.first) {
-              data[ind].entity_id = _id; data[ind].field = Field::Position_X; data[ind].value.fl_x = entity.pos.first;
-              ind += 1;
+              std::bitset<32>value (*reinterpret_cast<unsigned long *>(&entity.pos.first));
+              data.push_back(true);
+              for (int i = 0; i < 32; i++)
+                data.push_back(value[i]);
+            }
+            else {
+              data.push_back(false);
             }
             if (prev_entity.pos.second != entity.pos.second) {
-              data[ind].entity_id = _id; data[ind].field = Field::Position_Y; data[ind].value.fl_x = entity.pos.second;
-              ind += 1;
+              std::bitset<32>value (*reinterpret_cast<unsigned long *>(&entity.pos.second));
+              data.push_back(true);
+              for (int i = 0; i < 32; i++)
+                data.push_back(value[i]);
+            }
+            else {
+              data.push_back(false);
             }
             if (prev_entity.radius != entity.radius) {
-              data[ind].entity_id = _id; data[ind].field = Field::Radius; data[ind].value.fl_x = entity.radius;
-              ind += 1;
+              std::bitset<32>value (*reinterpret_cast<unsigned long *>(&entity.radius));
+              data.push_back(true);
+              for (int i = 0; i < 32; i++)
+                data.push_back(value[i]);
             }
-            if (prev_entity.user_id != entity.user_id) {
-              data[ind].entity_id = _id; data[ind].field = Field::UserId; data[ind].value.int_x = entity.user_id;
-              ind += 1;
+            else {
+              data.push_back(false);
             }
-            
           }
+          ind += 1;
         }
-        Packet<std::pair<uint32_t, std::array<DeltaEntity, 4048>>> packet_data = {.header = Header::Entities, .value = std::make_pair(current_ts, data)};
-        subscribe(&packet_data, clients_key[client_peer], sizeof(packet_data));
-        ENetPacket* packet = enet_packet_create (&packet_data,
-                                                 sizeof(packet_data),
+        subscribe(data.data(), clients_key[client_peer], data.size());
+        ENetPacket* packet = enet_packet_create (data.data(),
+                                                 data.size(),
                                                  ENET_PACKET_FLAG_UNRELIABLE_FRAGMENT);
         enet_peer_send(client_peer, 1, packet);
       }
@@ -327,7 +372,7 @@ void GameServer::Run() {
       entities[current_ts] = entities[current_ts - 1];
       //std::cout << "Info: broadcasting" << std::endl;
     }
-    else if (elapsed_seconds.count() > 3000) {
+    else if (elapsed_seconds.count() > 3000) {int
       working_flag = 0;
       break;
     }
